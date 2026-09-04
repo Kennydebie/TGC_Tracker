@@ -400,14 +400,14 @@ export const sources: SourceStatus[] = [
   },
   {
     id: 'marktplaats',
-    name: 'Marktplaats',
-    mode: 'Disabled',
-    health: 'Credentials required',
+    name: 'Marktplaats Public Monitor',
+    mode: 'Live',
+    health: 'Delayed',
     lastScan: 'Never',
-    nextScan: 'Manual search available',
+    nextScan: 'Every 15 minutes',
     records: 0,
-    access: 'Authorized API',
-    note: 'No scraping fallback. Saved-search links remain available.',
+    access: 'Public search pages · no credentials',
+    note: 'Stops on CAPTCHA, HTTP 403 or HTTP 429; no anti-bot bypass.',
   },
   {
     id: 'cardmarket',
@@ -429,7 +429,7 @@ export const sources: SourceStatus[] = [
     nextScan: 'After an authorized adapter is configured',
     records: 0,
     access: 'Allowlisted adapters only',
-    note: 'No generic scraping fallback is enabled.',
+    note: 'No scraping fallback is enabled.',
   },
 ];
 

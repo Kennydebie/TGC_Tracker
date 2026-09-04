@@ -223,7 +223,7 @@ export async function getUserSettings(db: D1Database, user: RequestUser) {
       postcode: '',
       currency: 'EUR' as const,
       timezone: 'Europe/Amsterdam',
-      localRadiusKm: 50,
+      localRadiusKm: 100,
       laborRate: 18,
       requiredRoi: 0.2,
       requiredProfit: 25,

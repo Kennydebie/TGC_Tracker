@@ -6,6 +6,7 @@ import {
   validateOfficialCardmarketUrl,
 } from '../../lib/connectors/cardmarket-public.ts';
 import { EbayBrowseConnector } from '../../lib/connectors/ebay.ts';
+import { MarktplaatsPublicConnector } from '../../lib/connectors/marktplaats-public.ts';
 
 void test('eBay connector reports missing credentials and normalises an official response shape', async () => {
   const connector = new EbayBrowseConnector({});
@@ -47,4 +48,52 @@ void test('Cardmarket price guide parser streams fixture rows and validates host
     () => validateOfficialCardmarketUrl('http://127.0.0.1/file.csv'),
     /allowlisted/,
   );
+});
+
+void test('Marktplaats public connector parses public HTML without credentials', async () => {
+  const html =
+    '<li class="hz-Listing"><a href="/v/hobby/pokemon/m1234567890-test"><span class="ListingTitle_x">Pokemon ETB sealed</span><h5 class="ListingPrice_x">€ 49,00</h5><span data-testid="location-label">Heerlen</span></a></li>';
+  let requests = 0;
+  const connector = new MarktplaatsPublicConnector({
+    fetchImpl: async () => {
+      requests += 1;
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': 'text/html', etag: 'fixture-v1' },
+      });
+    },
+  });
+  assert.deepEqual(await connector.validateConfig(), {
+    valid: true,
+    errors: [],
+  });
+  const records = await connector.scan({ query: 'pokemon etb', limit: 50 });
+  assert.equal(requests, 1);
+  assert.equal(records.length, 1);
+  const offers = await connector.normalise(records[0]!);
+  assert.equal(offers[0]?.sourceListingId, 'm1234567890');
+  assert.equal(offers[0]?.itemPrice, 49);
+  assert.equal(offers[0]?.location, 'Heerlen');
+  assert.equal(connector.getPolicy().access, 'public_page');
+  assert.equal(connector.getPolicy().checkoutAllowed, false);
+});
+
+void test('Marktplaats public connector stops immediately on 403 and 429', async () => {
+  for (const status of [403, 429]) {
+    let requests = 0;
+    const connector = new MarktplaatsPublicConnector({
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response('blocked', { status });
+      },
+    });
+    await assert.rejects(
+      connector.scan({ query: 'pokemon', limit: 50 }),
+      (error) => {
+        assert.equal((error as { status?: number }).status, status);
+        return true;
+      },
+    );
+    assert.equal(requests, 1);
+  }
 });

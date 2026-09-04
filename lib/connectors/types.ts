@@ -10,7 +10,12 @@ export type SourceCapability =
   | 'cart_assist';
 
 export type SourcePolicy = {
-  access: 'official_api' | 'public_file' | 'allowlisted_feed' | 'fixture';
+  access:
+    | 'official_api'
+    | 'public_file'
+    | 'public_page'
+    | 'allowlisted_feed'
+    | 'fixture';
   respectsRobots: boolean;
   permitsAutomatedFetch: boolean;
   checkoutAllowed: false;
@@ -48,6 +53,12 @@ export type NormalisedOffer = {
   language: string | null;
   seller: string | null;
   available: boolean;
+  location?: string | null;
+  snippet?: string | null;
+  thumbnailUrl?: string | null;
+  listingTimestampText?: string | null;
+  delivery?: string | null;
+  foundByQueries?: string[];
 };
 
 export type ScanInput = { query: string; limit: number; cursor?: string };

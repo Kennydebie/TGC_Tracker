@@ -18,6 +18,7 @@
     "format:check": "oxfmt --check",
     "db:generate": "drizzle-kit generate",
     "worker": "node scripts/run-worker.mjs --once",
+    "marktplaats:scan": "node --experimental-strip-types scripts/marktplaats-scout.mjs",
     "extension:build": "node scripts/build-extension.mjs"
   },
   "dependencies": {

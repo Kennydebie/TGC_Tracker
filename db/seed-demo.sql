@@ -4,7 +4,7 @@ INSERT INTO users (id, email, display_name, created_at, updated_at)
 VALUES ('demo-user', 'scout@example.invalid', 'Demo Scout', 1788501600000, 1788501600000);
 
 INSERT INTO user_settings (user_id, country, postcode, currency, timezone, local_radius_km, labor_rate_cents, required_roi_bps, required_profit_cents, demo_mode, created_at, updated_at)
-VALUES ('demo-user', 'NL', '3511', 'EUR', 'Europe/Amsterdam', 50, 1800, 2000, 2500, true, 1788501600000, 1788501600000);
+VALUES ('demo-user', 'NL', '3511', 'EUR', 'Europe/Amsterdam', 100, 1800, 2000, 2500, true, 1788501600000, 1788501600000);
 
 INSERT INTO sources (id, name, access_type, mode, enabled, policy_json, created_at, updated_at)
 VALUES

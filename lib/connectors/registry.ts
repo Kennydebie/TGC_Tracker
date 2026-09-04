@@ -1,5 +1,6 @@
 import { FixtureConnector } from './fixtures.ts';
 import { EbayBrowseConnector } from './ebay.ts';
+import { MarktplaatsPublicConnector } from './marktplaats-public.ts';
 import type { SourceConnector } from './types.ts';
 
 type ConnectorState = {
@@ -18,6 +19,12 @@ const ebay = new EbayBrowseConnector({
 const ebayEnabled = Boolean(
   process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET,
 );
+const marktplaatsAccessMode =
+  process.env.MARKTPLAATS_ACCESS_MODE ?? 'public_monitor';
+const marktplaatsPublic = new MarktplaatsPublicConnector({
+  postcode: process.env.MARKTPLAATS_POSTCODE,
+  distanceKm: Number(process.env.MARKTPLAATS_DISTANCE_KM ?? 100),
+});
 
 export const connectorRegistry: ConnectorState[] = [
   {
@@ -35,11 +42,17 @@ export const connectorRegistry: ConnectorState[] = [
     connector: ebay,
   },
   {
-    id: 'marktplaats',
-    enabled: false,
-    status: 'credentials_required',
+    id: 'marktplaats-public',
+    enabled: marktplaatsAccessMode === 'public_monitor',
+    status:
+      marktplaatsAccessMode === 'public_monitor'
+        ? 'public_monitor'
+        : 'official_api_not_configured',
     requirement:
-      'Authorized Marktplaats OAuth credentials; no scraping fallback',
+      marktplaatsAccessMode === 'public_monitor'
+        ? 'None; public search pages only'
+        : 'Future official API connector',
+    connector: marktplaatsPublic,
   },
   {
     id: 'cardmarket-public',
@@ -57,7 +70,9 @@ export const connectorRegistry: ConnectorState[] = [
 
 export function getEnabledConnectors(): SourceConnector[] {
   return connectorRegistry.flatMap((item) =>
-    item.enabled && item.connector ? [item.connector] : [],
+    item.enabled && item.connector && item.id !== 'marktplaats-public'
+      ? [item.connector]
+      : [],
   );
 }
 

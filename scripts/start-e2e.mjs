@@ -7,6 +7,14 @@ import process from 'node:process';
 
 const wrangler = 'node_modules/wrangler/bin/wrangler.js';
 const statePath = await mkdtemp(join(tmpdir(), 'tcg-scout-e2e-'));
+const environment = {
+  ...process.env,
+  TCG_SCOUT_E2E_STATE_PATH: statePath,
+  WRANGLER_WRITE_LOGS: 'false',
+  WRANGLER_LOG_PATH: join(statePath, 'wrangler-logs'),
+  MINIFLARE_REGISTRY_PATH: join(statePath, 'miniflare-registry'),
+  XDG_CONFIG_HOME: statePath,
+};
 const migrate = spawnSync(
   process.execPath,
   [
@@ -21,15 +29,11 @@ const migrate = spawnSync(
     '--persist-to',
     statePath,
   ],
-  { stdio: 'inherit' },
+  { env: environment, stdio: 'inherit' },
 );
 
 if (migrate.status !== 0) process.exit(migrate.status ?? 1);
 
-const environment = {
-  ...process.env,
-  TCG_SCOUT_E2E_STATE_PATH: statePath,
-};
 const server = spawn(
   process.execPath,
   ['node_modules/vinext/dist/cli.js', 'dev', '--port', '4173'],

@@ -14,8 +14,9 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
 const e2eStatePath = process.env.TCG_SCOUT_E2E_STATE_PATH;
 
 const localBindingConfig = {
-  main: 'vinext/server/fetch-handler',
+  main: './worker.ts',
   compatibility_flags: ['nodejs_compat'],
+  triggers: { crons: e2eStatePath ? undefined : ['*/15 * * * *'] },
   d1_databases: d1
     ? [
         {

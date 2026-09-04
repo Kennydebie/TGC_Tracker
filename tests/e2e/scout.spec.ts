@@ -2,6 +2,104 @@ import { expect, test, type Page } from '@playwright/test';
 
 const prismatic = '[data-deal-id="pe-etb-pair"]';
 
+const marktplaatsDashboard = {
+  accessMode: 'public_monitor',
+  intervalMinutes: 15,
+  status: 'healthy',
+  reason: null,
+  lastScanAt: '2026-09-04T12:15:00.000Z',
+  nextScanAt: '2026-09-04T12:30:00.000Z',
+  automaticRetryAt: null,
+  parserConfidence: 0.98,
+  metrics: {
+    queries: 18,
+    pagesFetched: 18,
+    listingsParsed: 42,
+    newListings: 1,
+    qualified: 0,
+    review: 1,
+    duplicates: 6,
+    priceDrops: 1,
+    alerts: 0,
+    errors: 0,
+  },
+  listings: [
+    {
+      id: 'listing:marktplaats-public:m1234567890',
+      sourceListingId: 'm1234567890',
+      sourceListingUrl:
+        'https://www.marktplaats.nl/v/hobby/pokemon/m1234567890-prismatic-etb',
+      title: 'Pokémon Prismatic Evolutions ETB sealed',
+      price: 49,
+      location: 'Heerlen',
+      seller: 'Public seller',
+      snippet: 'Ongeopend en ophalen mogelijk.',
+      thumbnailUrl: null,
+      listingTimestampText: 'Vandaag',
+      delivery: 'Ophalen of Verzenden',
+      firstSeenAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString(),
+      availability: 'active',
+      foundByQueries: ['pokemon kaarten'],
+      assessment: {
+        game: 'Pokémon',
+        productType: 'Elite Trainer Box',
+        sealedStatus: 'sealed',
+        quantity: 1,
+        riskFlags: [],
+        reviewRequired: true,
+        matchConfidence: 96,
+      },
+      distanceKm: 18,
+      pickupCost: {
+        oneWayDistanceKm: 18,
+        roundTripDistanceKm: 36,
+        travelTimeHours: 0.6,
+        fuelCost: 8.28,
+        parking: 0,
+        tolls: 0,
+        travelTimeCost: 10.8,
+        total: 19.08,
+      },
+      economics: {
+        modelVersion: 'deal-economics-v2',
+        itemPrice: 49,
+        inboundShipping: 0,
+        buyerFees: 0,
+        paymentFees: 0,
+        importCosts: 0,
+        travelCost: 19.08,
+        acquisitionLabor: 0,
+        expectedSalePrice: 0,
+        sellerFees: 0,
+        exitPaymentFees: 0,
+        outboundShipping: 0,
+        packaging: 0,
+        expectedReturnLoss: 0,
+        sellingLabor: 0,
+        liquidityHaircut: 0,
+        estimatedHours: 1,
+        expectedHoldingDays: 90,
+        requiredProfit: 25,
+        nonItemAcquisitionCosts: 19.08,
+        allInCost: 68.08,
+        conservativeNetExit: 0,
+        conservativeProfit: -68.08,
+        roi: -1,
+        profitPerHour: -68.08,
+        capitalVelocity: -1 / 90,
+        maximumItemPrice: -44.08,
+        maximumAllInCost: -25,
+      },
+      score: 49,
+      riskScore: 49,
+      priority: 'REVIEW',
+      isNew: true,
+      priceDrop: { from: 65, to: 49, percentage: 16 / 65 },
+    },
+  ],
+};
+
 async function open(page: Page, path: string) {
   const response = await page.goto(path);
   await expect(page.locator('html')).toHaveAttribute(
@@ -27,6 +125,7 @@ test('primary navigation loads every product surface', async ({ page }) => {
   await expect(page.getByLabel('Sign in with ChatGPT')).toBeVisible();
   const paths = [
     '/deals',
+    '/marktplaats',
     '/lot-lab',
     '/market',
     '/releases',
@@ -52,6 +151,54 @@ test('primary navigation loads every product surface', async ({ page }) => {
     );
     await expect(page.locator('main.main-content')).toBeVisible();
   }
+});
+
+test('Marktplaats Scout shows live metrics, local pickup and safe manual handoff', async ({
+  page,
+}) => {
+  await page.route('**/api/marktplaats', (route) =>
+    route.fulfill({ json: { data: marktplaatsDashboard } }),
+  );
+  await open(page, '/marktplaats');
+  await expect(page.getByText('Public monitor', { exact: true })).toBeVisible();
+  await expect(page.getByText('15 minutes', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Pokémon Prismatic Evolutions ETB sealed'),
+  ).toBeVisible();
+  await expect(page.getByText('€ 19,08')).toBeVisible();
+  await expect(page.locator('.price-drop')).toContainText('€ 65,00 → € 49,00');
+  const outbound = page.getByRole('link', { name: 'OPEN ON MARKTPLAATS' });
+  await expect(outbound).toHaveAttribute('target', '_blank');
+  await expect(outbound).toHaveAttribute(
+    'href',
+    /^https:\/\/www\.marktplaats\.nl\/v\//,
+  );
+  await page.getByRole('tab', { name: 'Needs review' }).click();
+  await expect(
+    page.getByText('Pokémon Prismatic Evolutions ETB sealed'),
+  ).toBeVisible();
+});
+
+test('Marktplaats Scout clearly reports a blocked source and delayed retry', async ({
+  page,
+}) => {
+  await page.route('**/api/marktplaats', (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ...marktplaatsDashboard,
+          status: 'blocked',
+          reason: 'Automated access was refused with HTTP 403.',
+          automaticRetryAt: '2026-09-04T18:15:00.000Z',
+          listings: [],
+        },
+      },
+    }),
+  );
+  await open(page, '/marktplaats');
+  await expect(page.getByRole('heading', { name: 'Blocked' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('HTTP 403');
+  await expect(page.getByText('Automatic retry')).toBeVisible();
 });
 
 test('deal search and filters change the result set', async ({ page }) => {

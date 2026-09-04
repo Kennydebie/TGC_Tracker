@@ -204,6 +204,134 @@ export const listingSnapshots = sqliteTable(
   ],
 );
 
+export const marktplaatsSearchDefinitions = sqliteTable(
+  'marktplaats_search_definitions',
+  {
+    id: text('id').primaryKey(),
+    query: text('query').notNull(),
+    kind: text('kind').notNull(),
+    category: text('category'),
+    minimumPriceCents: integer('minimum_price_cents'),
+    maximumPriceCents: integer('maximum_price_cents'),
+    postcode: text('postcode'),
+    distanceKm: integer('distance_km'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_marktplaats_search_query').on(table.query),
+    index('idx_marktplaats_search_enabled_kind').on(table.enabled, table.kind),
+  ],
+);
+
+export const marktplaatsListingDetails = sqliteTable(
+  'marktplaats_listing_details',
+  {
+    listingId: text('listing_id')
+      .primaryKey()
+      .references(() => listings.id, { onDelete: 'cascade' }),
+    location: text('location'),
+    publicSnippet: text('public_snippet'),
+    thumbnailUrl: text('thumbnail_url'),
+    listingTimestampText: text('listing_timestamp_text'),
+    delivery: text('delivery'),
+    foundByQueriesJson: text('found_by_queries_json').notNull().default('[]'),
+    assessmentJson: text('assessment_json').notNull().default('{}'),
+    distanceKm: real('distance_km'),
+    pickupCostCents: integer('pickup_cost_cents'),
+    missingScanCount: integer('missing_scan_count').notNull().default(0),
+    lastTitle: text('last_title').notNull(),
+    lastLocation: text('last_location'),
+    ...timestamps,
+  },
+  (table) => [
+    index('idx_marktplaats_details_missing').on(table.missingScanCount),
+  ],
+);
+
+export const marktplaatsListingDiscoveries = sqliteTable(
+  'marktplaats_listing_discoveries',
+  {
+    id: text('id').primaryKey(),
+    listingId: text('listing_id')
+      .notNull()
+      .references(() => listings.id, { onDelete: 'cascade' }),
+    searchId: text('search_id')
+      .notNull()
+      .references(() => marktplaatsSearchDefinitions.id),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_marktplaats_discovery_listing_search').on(
+      table.listingId,
+      table.searchId,
+    ),
+    index('idx_marktplaats_discovery_search_time').on(
+      table.searchId,
+      table.lastSeenAt,
+    ),
+  ],
+);
+
+export const marktplaatsListingEvents = sqliteTable(
+  'marktplaats_listing_events',
+  {
+    id: text('id').primaryKey(),
+    listingId: text('listing_id')
+      .notNull()
+      .references(() => listings.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    fromValue: text('from_value'),
+    toValue: text('to_value'),
+    payloadJson: text('payload_json').notNull().default('{}'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_marktplaats_events_listing_time').on(
+      table.listingId,
+      table.createdAt,
+    ),
+    index('idx_marktplaats_events_kind_time').on(table.kind, table.createdAt),
+  ],
+);
+
+export const marktplaatsSourceHealth = sqliteTable(
+  'marktplaats_source_health',
+  {
+    sourceId: text('source_id')
+      .primaryKey()
+      .references(() => sources.id),
+    status: text('status').notNull(),
+    reason: text('reason'),
+    blockedCode: text('blocked_code'),
+    automaticRetryAt: integer('automatic_retry_at', { mode: 'timestamp_ms' }),
+    lastSuccessfulScanAt: integer('last_successful_scan_at', {
+      mode: 'timestamp_ms',
+    }),
+    nextScanAt: integer('next_scan_at', { mode: 'timestamp_ms' }),
+    parserConfidenceBps: integer('parser_confidence_bps'),
+    queries: integer('queries').notNull().default(0),
+    pagesFetched: integer('pages_fetched').notNull().default(0),
+    listingsParsed: integer('listings_parsed').notNull().default(0),
+    newListings: integer('new_listings').notNull().default(0),
+    qualified: integer('qualified').notNull().default(0),
+    review: integer('review').notNull().default(0),
+    duplicates: integer('duplicates').notNull().default(0),
+    priceDrops: integer('price_drops').notNull().default(0),
+    alerts: integer('alerts').notNull().default(0),
+    errors: integer('errors').notNull().default(0),
+    ...timestamps,
+  },
+);
+
+export const scanLocks = sqliteTable('scan_locks', {
+  id: text('id').primaryKey(),
+  ownerJobId: text('owner_job_id').notNull(),
+  acquiredAt: integer('acquired_at', { mode: 'timestamp_ms' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
 export const priceObservations = sqliteTable(
   'price_observations',
   {

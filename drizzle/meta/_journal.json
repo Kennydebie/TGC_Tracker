@@ -15,6 +15,13 @@
       "when": 1788518102784,
       "tag": "0001_workable_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788525403228,
+      "tag": "0002_salty_shiver_man",
+      "breakpoints": true
     }
   ]
 }

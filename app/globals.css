@@ -48,6 +48,359 @@
   --radius-4xl: calc(var(--radius) * 2.1);
 }
 
+/* Marktplaats Scout — a denser amber field console within the existing realm. */
+.marktplaats-page {
+  --marktplaats-accent: #f4b84a;
+  --marktplaats-accent-strong: #ffd77d;
+}
+
+.marktplaats-status-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(17rem, 0.8fr);
+  gap: 1.5rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.marktplaats-status-panel::after {
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--marktplaats-accent) 22%, transparent),
+    transparent 68%
+  );
+  content: '';
+  height: 16rem;
+  pointer-events: none;
+  position: absolute;
+  right: -5rem;
+  top: -7rem;
+  width: 16rem;
+}
+
+.marktplaats-status-panel.blocked::after {
+  background: radial-gradient(circle, rgb(188 63 63 / 24%), transparent 68%);
+}
+
+.marktplaats-status-copy h2 {
+  font-size: clamp(1.6rem, 2.4vw, 2.4rem);
+  margin: 0.55rem 0;
+}
+
+.marktplaats-status-copy > p,
+.marktplaats-compliance p,
+.marktplaats-snippet {
+  color: var(--muted-foreground);
+  font-size: 0.94rem;
+  line-height: 1.65;
+  margin: 0;
+}
+
+.marktplaats-status-facts,
+.marktplaats-listing-facts {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.marktplaats-status-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  position: relative;
+  z-index: 1;
+}
+
+.marktplaats-status-facts > div,
+.marktplaats-listing-facts > div {
+  background: rgb(0 0 0 / 17%);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+}
+
+.marktplaats-status-facts dt,
+.marktplaats-listing-facts dt {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.marktplaats-status-facts dd,
+.marktplaats-listing-facts dd {
+  align-items: center;
+  display: flex;
+  font-size: 0.88rem;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
+}
+
+.marktplaats-status-facts dd {
+  color: var(--marktplaats-accent-strong);
+  font-weight: 700;
+}
+
+.marktplaats-listing-facts svg,
+.marktplaats-compliance svg,
+.source-warning svg,
+.marktplaats-risk-flags svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.marktplaats-metrics {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.marktplaats-metric {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+}
+
+.marktplaats-metric span {
+  color: var(--muted-foreground);
+  display: block;
+  font-size: 0.75rem;
+}
+
+.marktplaats-metric strong {
+  display: block;
+  font-size: 1.5rem;
+  margin-top: 0.25rem;
+}
+
+.marktplaats-compliance,
+.source-warning,
+.marktplaats-risk-flags {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.65rem;
+}
+
+.marktplaats-compliance {
+  border-color: color-mix(
+    in srgb,
+    var(--marktplaats-accent) 35%,
+    var(--border)
+  );
+  padding: 0.9rem 1rem;
+}
+
+.marktplaats-compliance svg {
+  color: var(--marktplaats-accent);
+  flex: 0 0 auto;
+  margin-top: 0.2rem;
+}
+
+.source-warning {
+  background: rgb(142 48 48 / 13%);
+  border: 1px solid rgb(220 90 90 / 28%);
+  border-radius: 0.65rem;
+  color: #ffaaaa;
+  margin-top: 1rem;
+  padding: 0.75rem;
+}
+
+.marktplaats-tabs > [role='tablist'] {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.marktplaats-group-heading {
+  margin: 1.25rem 0 0.85rem;
+}
+
+.marktplaats-listing-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.marktplaats-listing-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.marktplaats-listing-head,
+.marktplaats-price-row,
+.marktplaats-confidence {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.marktplaats-listing-head > div {
+  min-width: 0;
+}
+
+.marktplaats-listing-head h3 {
+  font-size: 1.05rem;
+  line-height: 1.35;
+  margin: 0.3rem 0 0;
+}
+
+.marktplaats-price-row > strong {
+  color: var(--marktplaats-accent-strong);
+  font-size: 1.35rem;
+}
+
+.price-drop {
+  align-items: center;
+  color: #8ee5af;
+  display: flex;
+  font-size: 0.78rem;
+  gap: 0.25rem;
+}
+
+.price-drop svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.marktplaats-listing-facts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.marktplaats-confidence {
+  display: grid;
+  grid-template-columns: auto minmax(5rem, 1fr) auto;
+}
+
+.marktplaats-confidence span,
+.marktplaats-confidence strong {
+  font-size: 0.78rem;
+}
+
+.marktplaats-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.marktplaats-risk-flags {
+  background: rgb(179 116 35 / 12%);
+  border: 1px solid rgb(240 176 75 / 24%);
+  border-radius: 0.55rem;
+  color: #f3c981;
+  font-size: 0.8rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.marktplaats-open-button,
+.iron-link {
+  align-items: center;
+  border-radius: 0.55rem;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 0.4rem;
+  justify-content: center;
+  letter-spacing: 0.03em;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.85rem;
+  text-decoration: none;
+}
+
+.marktplaats-inspect {
+  position: relative;
+}
+
+.marktplaats-inspect summary {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.85rem;
+}
+
+.marktplaats-inspect > div {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  box-shadow: 0 1rem 2rem rgb(0 0 0 / 35%);
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+  max-width: min(28rem, 82vw);
+  padding: 0.85rem;
+  position: absolute;
+  right: 0;
+  width: max-content;
+  z-index: 8;
+}
+
+.marktplaats-inspect p,
+.marktplaats-inspect span {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.marktplaats-open-button {
+  background: var(--marktplaats-accent);
+  color: #201609;
+}
+
+.marktplaats-open-button:hover {
+  background: var(--marktplaats-accent-strong);
+}
+
+.iron-link {
+  border: 1px solid var(--border);
+  color: var(--foreground);
+}
+
+.marktplaats-open-button svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.marktplaats-empty {
+  color: var(--muted-foreground);
+  padding: 2rem;
+  text-align: center;
+}
+
+.marktplaats-url-blocked {
+  color: #ffaaaa;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 1100px) {
+  .marktplaats-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .marktplaats-listing-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .marktplaats-status-panel,
+  .marktplaats-listing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .marktplaats-status-facts,
+  .marktplaats-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .marktplaats-listing-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
 :root,
 .dark {
   --background: #080a0d;

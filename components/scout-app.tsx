@@ -48,6 +48,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ScoutCrest, RuneDivider } from '@/components/brand';
 import { NativeNavigationLink } from '@/components/native-navigation-link';
+import { MarktplaatsScout } from '@/components/marktplaats-scout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -110,10 +111,12 @@ import {
   type DealEconomics,
 } from '@/lib/domain';
 import { isSafeSourceListingUrl } from '@/lib/listing-url';
+import type { MarktplaatsDashboard } from '@/lib/marktplaats';
 
 type Section =
   | 'dashboard'
   | 'deals'
+  | 'marktplaats'
   | 'lot-lab'
   | 'market'
   | 'releases'
@@ -191,7 +194,7 @@ const defaultUserSettings: UserSettings = {
   postcode: '',
   currency: 'EUR',
   timezone: 'Europe/Amsterdam',
-  localRadiusKm: 50,
+  localRadiusKm: 100,
   laborRate: 18,
   requiredRoi: 0.2,
   requiredProfit: 25,
@@ -230,6 +233,13 @@ const navItems: {
     subtitle: 'Deal finder',
     href: '/deals',
     icon: Compass,
+  },
+  {
+    section: 'marktplaats',
+    label: 'Marktplaats Scout',
+    subtitle: 'Local Market Hunt',
+    href: '/marktplaats',
+    icon: MapPin,
   },
   {
     section: 'lot-lab',
@@ -315,6 +325,10 @@ const pageMeta: Record<Section, { title: string; subtitle: string }> = {
   deals: {
     title: 'Bounty Board',
     subtitle: 'Underpriced listings that survive the costs',
+  },
+  marktplaats: {
+    title: 'Marktplaats Scout',
+    subtitle: 'Local Market Hunt',
   },
   'lot-lab': {
     title: 'Lot Lab',
@@ -837,6 +851,7 @@ export function ScoutApp({
               trackedIds={trackedIds}
             />
           )}
+          {section === 'marktplaats' && <MarktplaatsScout />}
           {section === 'lot-lab' && <LotLab onNotice={setNotice} />}
           {section === 'market' && (
             <MarketPage
@@ -4318,9 +4333,25 @@ function AlertItem({
 
 function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
   const [testingSourceId, setTestingSourceId] = useState<string | null>(null);
+  const [marktplaatsSource, setMarktplaatsSource] =
+    useState<MarktplaatsDashboard | null>(null);
   const [sourceResults, setSourceResults] = useState<
     Record<string, { ok: boolean; status: string; checkedAt: string }>
   >({});
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/marktplaats', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { data: MarktplaatsDashboard };
+      })
+      .then((payload) => {
+        if (!cancelled && payload) setMarktplaatsSource(payload.data);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const testSource = async (sourceId: string, sourceName: string) => {
     const apiId = sourceId === 'cardmarket' ? 'cardmarket-public' : sourceId;
     setTestingSourceId(sourceId);
@@ -4369,95 +4400,186 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
           </strong>
           <span>isolated fixture connector</span>
           <small>
-            {
-              sources.filter(
-                (source) =>
-                  source.mode === 'Live' && source.health === 'Healthy',
-              ).length
-            }{' '}
+            {sources.filter(
+              (source) => source.mode === 'Live' && source.health === 'Healthy',
+            ).length + (marktplaatsSource?.status === 'healthy' ? 1 : 0)}{' '}
             genuinely live
           </small>
         </div>
       </Panel>
       <div className="source-card-grid">
-        {sources.map((source) => (
-          <Panel className="source-card" key={source.id}>
-            <div className="source-card-head">
-              <span
+        <Panel className="source-card" key="marktplaats-public">
+          <div className="source-card-head">
+            <span
+              className={cn(
+                'source-orb',
+                marktplaatsSource?.status === 'healthy' && 'healthy',
+                ['blocked', 'parser_review_required'].includes(
+                  marktplaatsSource?.status ?? '',
+                ) && 'warning',
+              )}
+            />
+            <div>
+              <h3>Marktplaats Public Monitor</h3>
+              <p>Public Monitor · credentials not required</p>
+            </div>
+            <Badge variant="outline">Live</Badge>
+          </div>
+          <dl>
+            <div>
+              <dt>Health</dt>
+              <dd>
+                {marktplaatsSource?.status
+                  .replaceAll('_', ' ')
+                  .replace(/^./, (letter) => letter.toUpperCase()) ??
+                  'Awaiting first scan'}
+              </dd>
+            </div>
+            <div>
+              <dt>Last scan</dt>
+              <dd>
+                {marktplaatsSource?.lastScanAt
+                  ? new Date(marktplaatsSource.lastScanAt).toLocaleString(
+                      'nl-NL',
+                      { timeZone: 'Europe/Amsterdam' },
+                    )
+                  : 'Never'}
+              </dd>
+            </div>
+            <div>
+              <dt>Next scan</dt>
+              <dd>
+                {marktplaatsSource?.nextScanAt
+                  ? new Date(marktplaatsSource.nextScanAt).toLocaleString(
+                      'nl-NL',
+                      { timeZone: 'Europe/Amsterdam' },
+                    )
+                  : 'Every 15 minutes'}
+              </dd>
+            </div>
+            <div>
+              <dt>Queries / listings</dt>
+              <dd className="mono">
+                {marktplaatsSource?.metrics.queries ?? 0} /{' '}
+                {marktplaatsSource?.metrics.listingsParsed ?? 0}
+              </dd>
+            </div>
+          </dl>
+          <div className="compliance-note">
+            <ShieldAlert />
+            Public-page monitoring may be restricted by the source. The monitor
+            stops automatically on access blocks and does not bypass anti-bot
+            controls.
+          </div>
+          <div className="card-actions">
+            <NativeNavigationLink className="iron-link" href="/marktplaats">
+              Open Scout
+            </NativeNavigationLink>
+            <Button
+              className="gold-button"
+              disabled={testingSourceId === 'marktplaats-public'}
+              onClick={() =>
+                void testSource(
+                  'marktplaats-public',
+                  'Marktplaats Public Monitor',
+                )
+              }
+            >
+              <RefreshCw
                 className={cn(
-                  'source-orb',
-                  source.health === 'Healthy' && 'healthy',
-                  source.health.includes('required') && 'muted',
-                  source.health === 'Format change' && 'warning',
+                  testingSourceId === 'marktplaats-public' && 'spin',
                 )}
               />
-              <div>
-                <h3>{source.name}</h3>
-                <p>{source.access}</p>
-              </div>
-              <Badge variant="outline">{source.mode}</Badge>
-            </div>
-            <dl>
-              <div>
-                <dt>Health</dt>
-                <dd>{source.health}</dd>
-              </div>
-              <div>
-                <dt>Last scan</dt>
-                <dd>{source.lastScan}</dd>
-              </div>
-              <div>
-                <dt>Next scan</dt>
-                <dd>{source.nextScan}</dd>
-              </div>
-              <div>
-                <dt>Records</dt>
-                <dd className="mono">
-                  {source.records.toLocaleString('nl-NL')}
-                </dd>
-              </div>
-            </dl>
-            <div className="compliance-note">
-              <ShieldAlert />
-              {source.note}
-            </div>
-            {sourceResults[source.id] ? (
-              <output className="safety-note">
-                <HeartPulse />
-                <span>
-                  {sourceResults[source.id].ok ? 'Connected' : 'Not connected'}{' '}
-                  · {sourceResults[source.id].status} ·{' '}
-                  {new Date(
-                    sourceResults[source.id].checkedAt,
-                  ).toLocaleTimeString('nl-NL', {
-                    timeZone: 'Europe/Amsterdam',
-                  })}
-                </span>
-              </output>
-            ) : null}
-            <div className="card-actions">
-              <Button
-                variant="outline"
-                className="iron-button"
-                onClick={() => {
-                  window.location.href = '/settings';
-                }}
-              >
-                Configure
-              </Button>
-              <Button
-                className="gold-button"
-                disabled={testingSourceId === source.id}
-                onClick={() => void testSource(source.id, source.name)}
-              >
-                <RefreshCw
-                  className={cn(testingSourceId === source.id && 'spin')}
+              {testingSourceId === 'marktplaats-public'
+                ? 'Testing…'
+                : 'Check configuration'}
+            </Button>
+          </div>
+        </Panel>
+        {sources
+          .filter((source) => source.id !== 'marktplaats')
+          .map((source) => (
+            <Panel className="source-card" key={source.id}>
+              <div className="source-card-head">
+                <span
+                  className={cn(
+                    'source-orb',
+                    source.health === 'Healthy' && 'healthy',
+                    source.health.includes('required') && 'muted',
+                    source.health === 'Format change' && 'warning',
+                  )}
                 />
-                {testingSourceId === source.id ? 'Testing…' : 'Test connection'}
-              </Button>
-            </div>
-          </Panel>
-        ))}
+                <div>
+                  <h3>{source.name}</h3>
+                  <p>{source.access}</p>
+                </div>
+                <Badge variant="outline">{source.mode}</Badge>
+              </div>
+              <dl>
+                <div>
+                  <dt>Health</dt>
+                  <dd>{source.health}</dd>
+                </div>
+                <div>
+                  <dt>Last scan</dt>
+                  <dd>{source.lastScan}</dd>
+                </div>
+                <div>
+                  <dt>Next scan</dt>
+                  <dd>{source.nextScan}</dd>
+                </div>
+                <div>
+                  <dt>Records</dt>
+                  <dd className="mono">
+                    {source.records.toLocaleString('nl-NL')}
+                  </dd>
+                </div>
+              </dl>
+              <div className="compliance-note">
+                <ShieldAlert />
+                {source.note}
+              </div>
+              {sourceResults[source.id] ? (
+                <output className="safety-note">
+                  <HeartPulse />
+                  <span>
+                    {sourceResults[source.id].ok
+                      ? 'Connected'
+                      : 'Not connected'}{' '}
+                    · {sourceResults[source.id].status} ·{' '}
+                    {new Date(
+                      sourceResults[source.id].checkedAt,
+                    ).toLocaleTimeString('nl-NL', {
+                      timeZone: 'Europe/Amsterdam',
+                    })}
+                  </span>
+                </output>
+              ) : null}
+              <div className="card-actions">
+                <Button
+                  variant="outline"
+                  className="iron-button"
+                  onClick={() => {
+                    window.location.href = '/settings';
+                  }}
+                >
+                  Configure
+                </Button>
+                <Button
+                  className="gold-button"
+                  disabled={testingSourceId === source.id}
+                  onClick={() => void testSource(source.id, source.name)}
+                >
+                  <RefreshCw
+                    className={cn(testingSourceId === source.id && 'spin')}
+                  />
+                  {testingSourceId === source.id
+                    ? 'Testing…'
+                    : 'Test connection'}
+                </Button>
+              </div>
+            </Panel>
+          ))}
       </div>
     </div>
   );

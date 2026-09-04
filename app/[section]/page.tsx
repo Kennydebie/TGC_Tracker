@@ -11,6 +11,7 @@ export default async function SectionPage({
   const { section } = await params;
   const sections = new Set([
     'deals',
+    'marktplaats',
     'lot-lab',
     'market',
     'releases',
