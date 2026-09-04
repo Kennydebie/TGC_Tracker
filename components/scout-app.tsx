@@ -33,6 +33,7 @@ import {
   ExternalLink,
   Scale,
   Search,
+  ShoppingBag,
   ShieldAlert,
   Sparkles,
   Table2,
@@ -49,6 +50,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScoutCrest, RuneDivider } from '@/components/brand';
 import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { MarktplaatsScout } from '@/components/marktplaats-scout';
+import { AmazonScout } from '@/components/amazon-scout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -112,11 +114,13 @@ import {
 } from '@/lib/domain';
 import { isSafeSourceListingUrl } from '@/lib/listing-url';
 import type { MarktplaatsDashboard } from '@/lib/marktplaats';
+import type { AmazonDashboard } from '@/lib/amazon';
 
 type Section =
   | 'dashboard'
   | 'deals'
   | 'marktplaats'
+  | 'amazon'
   | 'lot-lab'
   | 'market'
   | 'releases'
@@ -242,6 +246,13 @@ const navItems: {
     icon: MapPin,
   },
   {
+    section: 'amazon',
+    label: 'Amazon Scout',
+    subtitle: 'Merchant Realms',
+    href: '/amazon',
+    icon: ShoppingBag,
+  },
+  {
     section: 'lot-lab',
     label: 'Lot Lab',
     subtitle: 'Underwrite collections',
@@ -330,6 +341,10 @@ const pageMeta: Record<Section, { title: string; subtitle: string }> = {
     title: 'Marktplaats Scout',
     subtitle: 'Local Market Hunt',
   },
+  amazon: {
+    title: 'Amazon Scout',
+    subtitle: 'Merchant Realms',
+  },
   'lot-lab': {
     title: 'Lot Lab',
     subtitle: 'Conservative collection underwriting',
@@ -404,6 +419,10 @@ export function ScoutApp({
   const [pendingTrackIds, setPendingTrackIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [watchlistLoaded, setWatchlistLoaded] = useState(!user);
+  const visiblePendingTrackIds = watchlistLoaded
+    ? pendingTrackIds
+    : new Set(dealRecords.map((item) => item.id));
   const [recheckingIds, setRecheckingIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -434,20 +453,30 @@ export function ScoutApp({
       });
     if (user) {
       void Promise.all([
-        fetch('/api/watchlist').then(
-          async (response) => (await response.json()) as { dealIds?: string[] },
-        ),
-        fetch('/api/shadow').then(
-          async (response) =>
-            (await response.json()) as { data?: ShadowTradeRow[] },
-        ),
-      ]).then(([watchlist, shadow]) => {
-        if (cancelled) return;
-        if (Array.isArray(watchlist.dealIds))
-          setTrackedIds(new Set(watchlist.dealIds));
-        if (Array.isArray(shadow.data))
-          setShadowRows([...shadow.data, ...shadowTrades]);
-      });
+        fetch('/api/watchlist').then(async (response) => {
+          if (!response.ok) throw new Error('Watchlist could not be loaded.');
+          return (await response.json()) as { dealIds?: string[] };
+        }),
+        fetch('/api/shadow').then(async (response) => {
+          if (!response.ok)
+            throw new Error('Shadow trades could not be loaded.');
+          return (await response.json()) as { data?: ShadowTradeRow[] };
+        }),
+      ])
+        .then(([watchlist, shadow]) => {
+          if (cancelled) return;
+          if (Array.isArray(watchlist.dealIds))
+            setTrackedIds(new Set(watchlist.dealIds));
+          if (Array.isArray(shadow.data))
+            setShadowRows([...shadow.data, ...shadowTrades]);
+        })
+        .catch(() => {
+          if (!cancelled)
+            setNotice('Saved Watchtower data could not be loaded.');
+        })
+        .finally(() => {
+          if (!cancelled) setWatchlistLoaded(true);
+        });
     }
     return () => {
       cancelled = true;
@@ -717,7 +746,7 @@ export function ScoutApp({
           <span className="pulse-dot" />
           <div>
             <strong>Demo realm</strong>
-            <small>{sources.length} configured sources</small>
+            <small>{sources.length + 1} configured sources</small>
           </div>
           <span className="mono">isolated</span>
         </div>
@@ -835,7 +864,7 @@ export function ScoutApp({
               onInspect={setSelectedDeal}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
-              pendingTrackIds={pendingTrackIds}
+              pendingTrackIds={visiblePendingTrackIds}
               recheckingIds={recheckingIds}
               trackedIds={trackedIds}
             />
@@ -846,12 +875,13 @@ export function ScoutApp({
               onInspect={setSelectedDeal}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
-              pendingTrackIds={pendingTrackIds}
+              pendingTrackIds={visiblePendingTrackIds}
               recheckingIds={recheckingIds}
               trackedIds={trackedIds}
             />
           )}
           {section === 'marktplaats' && <MarktplaatsScout />}
+          {section === 'amazon' && <AmazonScout />}
           {section === 'lot-lab' && <LotLab onNotice={setNotice} />}
           {section === 'market' && (
             <MarketPage
@@ -905,7 +935,9 @@ export function ScoutApp({
         onShadow={(deal) => void shadowBuy(deal)}
         onTrack={toggleTrack}
         rechecking={selectedDeal ? recheckingIds.has(selectedDeal.id) : false}
-        tracking={selectedDeal ? pendingTrackIds.has(selectedDeal.id) : false}
+        tracking={
+          selectedDeal ? visiblePendingTrackIds.has(selectedDeal.id) : false
+        }
         tracked={selectedDeal ? trackedIds.has(selectedDeal.id) : false}
       />
     </div>
@@ -3937,7 +3969,8 @@ function ShadowPage({ trades }: { trades: ShadowTradeRow[] }) {
                     </TableCell>
                     <TableCell>{trade.detected}</TableCell>
                     <TableCell className="mono">
-                      {money(trade.economics.conservativeProfit)}
+                      {money(trade.economics.conservativeProfit)} ·{' '}
+                      {percent(trade.economics.roi)}
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -4335,6 +4368,9 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
   const [testingSourceId, setTestingSourceId] = useState<string | null>(null);
   const [marktplaatsSource, setMarktplaatsSource] =
     useState<MarktplaatsDashboard | null>(null);
+  const [amazonSource, setAmazonSource] = useState<AmazonDashboard | null>(
+    null,
+  );
   const [sourceResults, setSourceResults] = useState<
     Record<string, { ok: boolean; status: string; checkedAt: string }>
   >({});
@@ -4347,6 +4383,14 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
       })
       .then((payload) => {
         if (!cancelled && payload) setMarktplaatsSource(payload.data);
+      });
+    void fetch('/api/amazon', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { data: AmazonDashboard };
+      })
+      .then((payload) => {
+        if (!cancelled && payload) setAmazonSource(payload.data);
       });
     return () => {
       cancelled = true;
@@ -4396,13 +4440,16 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
         </div>
         <div className="source-count">
           <strong>
-            {sources.filter((source) => source.mode === 'Fixture').length}
+            {sources.filter((source) => source.mode === 'Fixture').length +
+              (amazonSource?.dataMode === 'fixture' ? 1 : 0)}
           </strong>
           <span>isolated fixture connector</span>
           <small>
             {sources.filter(
               (source) => source.mode === 'Live' && source.health === 'Healthy',
-            ).length + (marktplaatsSource?.status === 'healthy' ? 1 : 0)}{' '}
+            ).length +
+              (marktplaatsSource?.status === 'healthy' ? 1 : 0) +
+              (amazonSource?.apiConnected ? 1 : 0)}{' '}
             genuinely live
           </small>
         </div>
@@ -4494,6 +4541,76 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
                 ? 'Testing…'
                 : 'Check configuration'}
             </Button>
+          </div>
+        </Panel>
+        <Panel className="source-card" key="amazon-keepa">
+          <div className="source-card-head">
+            <span
+              className={cn(
+                'source-orb',
+                amazonSource?.apiConnected && 'healthy',
+                amazonSource?.sourceState === 'rate_limited' && 'warning',
+                !amazonSource?.apiConnected && 'muted',
+              )}
+            />
+            <div>
+              <h3>Keepa / Amazon Scout</h3>
+              <p>Official API · no Amazon HTML fallback</p>
+            </div>
+            <Badge variant="outline">
+              {amazonSource?.apiConnected
+                ? 'Live'
+                : amazonSource?.dataMode === 'fixture'
+                  ? 'Fixture'
+                  : 'Disabled'}
+            </Badge>
+          </div>
+          <dl>
+            <div>
+              <dt>API</dt>
+              <dd>
+                {amazonSource?.apiConnected
+                  ? 'Connected'
+                  : amazonSource?.sourceState === 'key_required'
+                    ? 'Key required'
+                    : 'No authenticated success'}
+              </dd>
+            </div>
+            <div>
+              <dt>Token balance</dt>
+              <dd className="mono">
+                {amazonSource?.tokens.available?.toLocaleString('nl-NL') ??
+                  'Unavailable'}
+              </dd>
+            </div>
+            <div>
+              <dt>Last / next scan</dt>
+              <dd>
+                {amazonSource?.lastScanAt
+                  ? new Date(amazonSource.lastScanAt).toLocaleString('nl-NL', {
+                      timeZone: 'Europe/Amsterdam',
+                    })
+                  : 'Awaiting authenticated scan'}
+              </dd>
+            </div>
+            <div>
+              <dt>Checked / changes / qualified</dt>
+              <dd className="mono">
+                {amazonSource?.metrics.productsChecked ?? 0} /{' '}
+                {amazonSource?.metrics.priceChanges ?? 0} /{' '}
+                {amazonSource?.metrics.qualified ?? 0}
+              </dd>
+            </div>
+          </dl>
+          <div className="compliance-note">
+            <ShieldAlert />
+            Keepa covers DE, FR, IT and ES here. NL and BE watches remain saved
+            for manual or future provider support. No scraping fallback.
+          </div>
+          <div className="card-actions">
+            <NativeNavigationLink className="iron-link" href="/amazon">
+              Open Amazon Scout
+            </NativeNavigationLink>
           </div>
         </Panel>
         {sources

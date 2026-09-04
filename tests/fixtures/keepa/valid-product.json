@@ -1,0 +1,57 @@
+{
+  "timestamp": 1788516900000,
+  "tokensLeft": 1240,
+  "tokensConsumed": 1,
+  "refillRate": 5,
+  "refillIn": 12000,
+  "products": [
+    {
+      "asin": "B0DPKPRSM1",
+      "title": "Pokémon Prismatic Evolutions Elite Trainer Box English",
+      "brand": "Pokémon",
+      "manufacturer": "The Pokémon Company",
+      "productGroup": "Toy",
+      "packageQuantity": 1,
+      "eanList": ["0196214105156"],
+      "lastUpdate": 8244720,
+      "stats": {
+        "current": [
+          5499, 5599, -1, -1, 7495, -1, -1, -1, -1, -1, 5599, 8, -1, -1, -1, -1,
+          -1, -1, 5499
+        ],
+        "buyBoxIsAmazon": true,
+        "buyBoxIsFBA": true,
+        "buyBoxSellerId": "AMAZON"
+      },
+      "csv": [
+        null,
+        [8200000, 7890, 8220000, 7495, 8240000, 6195],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        [8200000, 7890, 8220000, 7495, 8240000, 5499]
+      ],
+      "offers": [
+        {
+          "sellerId": "AMAZON",
+          "isFBA": true,
+          "isAmazon": true,
+          "lastSeen": 8244720
+        }
+      ]
+    }
+  ]
+}

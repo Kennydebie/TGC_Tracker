@@ -12,6 +12,7 @@ export default async function SectionPage({
   const sections = new Set([
     'deals',
     'marktplaats',
+    'amazon',
     'lot-lab',
     'market',
     'releases',

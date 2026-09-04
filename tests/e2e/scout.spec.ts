@@ -126,6 +126,7 @@ test('primary navigation loads every product surface', async ({ page }) => {
   const paths = [
     '/deals',
     '/marktplaats',
+    '/amazon',
     '/lot-lab',
     '/market',
     '/releases',
@@ -470,7 +471,12 @@ test('missing eBay credentials are reported without a scraping fallback', async 
   expect(payload.status).toBe('credentials_required');
   expect(payload.requirement).toContain('EBAY_CLIENT_ID');
   await open(page, '/sources');
-  await expect(page.getByText('No scraping fallback')).toBeVisible();
+  await expect(
+    page
+      .locator('.source-card')
+      .filter({ hasText: 'eBay Browse (live)' })
+      .getByText('No scraping fallback'),
+  ).toBeVisible();
 });
 
 test('demo and production records are explicitly separated', async ({

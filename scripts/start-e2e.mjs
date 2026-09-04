@@ -45,6 +45,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     server.kill(signal);
     cleanup();
+    process.exit(0);
   });
 }
 

@@ -396,7 +396,7 @@ export const sources: SourceStatus[] = [
     nextScan: 'After setup',
     records: 0,
     access: 'Official API',
-    note: 'Active asks only; sold evidence remains separate.',
+    note: 'Active asks only; sold evidence remains separate. No scraping fallback.',
   },
   {
     id: 'marktplaats',

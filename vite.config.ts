@@ -16,7 +16,9 @@ const e2eStatePath = process.env.TCG_SCOUT_E2E_STATE_PATH;
 const localBindingConfig = {
   main: './worker.ts',
   compatibility_flags: ['nodejs_compat'],
-  triggers: { crons: e2eStatePath ? undefined : ['*/15 * * * *'] },
+  triggers: {
+    crons: e2eStatePath ? undefined : ['*/15 * * * *', '0 */3 * * *'],
+  },
   d1_databases: d1
     ? [
         {

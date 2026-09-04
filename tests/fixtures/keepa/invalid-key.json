@@ -1,0 +1,7 @@
+{
+  "error": {
+    "type": "invalidParameter",
+    "code": 402,
+    "message": "The API key is invalid or does not have access."
+  }
+}

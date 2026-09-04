@@ -325,6 +325,192 @@ export const marktplaatsSourceHealth = sqliteTable(
   },
 );
 
+export const amazonMarketplaceProducts = sqliteTable(
+  'amazon_marketplace_products',
+  {
+    id: text('id').primaryKey(),
+    asin: text('asin').notNull(),
+    marketplace: text('marketplace').notNull(),
+    provider: text('provider').notNull().default('amazon_keepa'),
+    canonicalProductId: text('canonical_product_id').references(
+      () => products.id,
+    ),
+    ean: text('ean'),
+    gtin: text('gtin'),
+    manufacturerSku: text('manufacturer_sku'),
+    title: text('title').notNull(),
+    brand: text('brand'),
+    manufacturer: text('manufacturer'),
+    productGroup: text('product_group'),
+    packageQuantity: integer('package_quantity'),
+    productLanguage: text('product_language'),
+    matchConfidenceBps: integer('match_confidence_bps'),
+    matchMethod: text('match_method'),
+    mappingJson: text('mapping_json').notNull().default('{}'),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_amazon_product_market_asin').on(
+      table.marketplace,
+      table.asin,
+    ),
+    index('idx_amazon_product_canonical').on(table.canonicalProductId),
+  ],
+);
+
+export const amazonSnapshots = sqliteTable(
+  'amazon_snapshots',
+  {
+    id: text('id').primaryKey(),
+    amazonProductId: text('amazon_product_id')
+      .notNull()
+      .references(() => amazonMarketplaceProducts.id, { onDelete: 'cascade' }),
+    sourceUpdatedAt: integer('source_updated_at', { mode: 'timestamp_ms' }),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    currentPriceCents: integer('current_price_cents'),
+    shippingCents: integer('shipping_cents'),
+    shippingStatus: text('shipping_status').notNull(),
+    deliveredPriceCents: integer('delivered_price_cents'),
+    buyBoxPriceCents: integer('buy_box_price_cents'),
+    amazonPriceCents: integer('amazon_price_cents'),
+    lowestNewCents: integer('lowest_new_cents'),
+    sellerType: text('seller_type').notNull(),
+    sellerName: text('seller_name'),
+    sellerCount: integer('seller_count'),
+    offerCount: integer('offer_count'),
+    availability: text('availability').notNull(),
+    offerFreshness: text('offer_freshness').notNull(),
+    contentHash: text('content_hash').notNull(),
+    rawJson: text('raw_json').notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+  },
+  (table) => [
+    uniqueIndex('idx_amazon_snapshots_product_hash').on(
+      table.amazonProductId,
+      table.contentHash,
+    ),
+    index('idx_amazon_snapshots_product_time').on(
+      table.amazonProductId,
+      table.fetchedAt,
+    ),
+  ],
+);
+
+export const amazonPriceEvents = sqliteTable(
+  'amazon_price_events',
+  {
+    id: text('id').primaryKey(),
+    amazonProductId: text('amazon_product_id')
+      .notNull()
+      .references(() => amazonMarketplaceProducts.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    previousValue: text('previous_value'),
+    currentValue: text('current_value'),
+    payloadJson: text('payload_json').notNull().default('{}'),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+  },
+  (table) => [
+    index('idx_amazon_events_product_time').on(
+      table.amazonProductId,
+      table.occurredAt,
+    ),
+    index('idx_amazon_events_kind_time').on(table.kind, table.occurredAt),
+  ],
+);
+
+export const amazonSellerCountHistory = sqliteTable(
+  'amazon_seller_count_history',
+  {
+    id: text('id').primaryKey(),
+    amazonProductId: text('amazon_product_id')
+      .notNull()
+      .references(() => amazonMarketplaceProducts.id, { onDelete: 'cascade' }),
+    sellerCount: integer('seller_count'),
+    offerCount: integer('offer_count'),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_amazon_sellers_product_time').on(
+      table.amazonProductId,
+      table.observedAt,
+    ),
+  ],
+);
+
+export const amazonScanRuns = sqliteTable(
+  'amazon_scan_runs',
+  {
+    id: text('id').primaryKey(),
+    mode: text('mode').notNull(),
+    status: text('status').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
+    marketplacesJson: text('marketplaces_json').notNull(),
+    productsChecked: integer('products_checked').notNull().default(0),
+    priceChanges: integer('price_changes').notNull().default(0),
+    newProducts: integer('new_products').notNull().default(0),
+    qualified: integer('qualified').notNull().default(0),
+    errors: integer('errors').notNull().default(0),
+    errorCode: text('error_code'),
+    reason: text('reason'),
+  },
+  (table) => [
+    index('idx_amazon_runs_mode_time').on(table.mode, table.startedAt),
+  ],
+);
+
+export const keepaUsage = sqliteTable(
+  'keepa_usage',
+  {
+    id: text('id').primaryKey(),
+    scanRunId: text('scan_run_id').references(() => amazonScanRuns.id),
+    tokensAvailable: integer('tokens_available'),
+    tokensUsed: integer('tokens_used').notNull().default(0),
+    refillRate: integer('refill_rate'),
+    refillInMs: integer('refill_in_ms'),
+    skippedRequests: integer('skipped_requests').notNull().default(0),
+    nextSafeScanAt: integer('next_safe_scan_at', { mode: 'timestamp_ms' }),
+    capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('idx_keepa_usage_time').on(table.capturedAt)],
+);
+
+export const amazonWatchRules = sqliteTable(
+  'amazon_watch_rules',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    canonicalProductId: text('canonical_product_id').references(
+      () => products.id,
+    ),
+    asin: text('asin'),
+    marketplace: text('marketplace'),
+    game: text('game'),
+    setName: text('set_name'),
+    ruleType: text('rule_type').notNull(),
+    thresholdJson: text('threshold_json').notNull(),
+    sourceUrl: text('source_url'),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [
+    index('idx_amazon_watch_user_active').on(table.userId, table.active),
+    index('idx_amazon_watch_asin_market').on(table.asin, table.marketplace),
+  ],
+);
+
 export const scanLocks = sqliteTable('scan_locks', {
   id: text('id').primaryKey(),
   ownerJobId: text('owner_job_id').notNull(),

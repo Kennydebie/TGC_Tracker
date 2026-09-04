@@ -1,0 +1,47 @@
+{
+  "tokensLeft": 900,
+  "tokensConsumed": 2,
+  "refillRate": 5,
+  "refillIn": 10000,
+  "products": [
+    {
+      "asin": "B0DPKPRSM1",
+      "title": "Pokémon Elite Trainer Box English",
+      "lastUpdate": 8244720,
+      "stats": {
+        "current": [
+          5499, 5599, -1, -1, -1, -1, -1, -1, -1, -1, -1, 8, -1, -1, -1, -1, -1,
+          -1, 5499
+        ]
+      }
+    },
+    {
+      "asin": "B0DSTD36IT",
+      "title": "Pokémon Booster Box 36 Packs English",
+      "lastUpdate": 8244720,
+      "stats": {
+        "current": [
+          -1,
+          11999,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          null,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          11999
+        ]
+      }
+    }
+  ]
+}

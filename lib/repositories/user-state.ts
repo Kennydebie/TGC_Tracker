@@ -427,18 +427,21 @@ export async function listShadowTrades(db: D1Database, user: RequestUser) {
               shadow_trades.created_at, shadow_trades.economics_json,
               shadow_trades.later_supported_profit_cents,
               shadow_trades.status, shadow_trades.next_follow_up_at,
+              shadow_trades.data_mode,
               products.name
        FROM shadow_trades
        INNER JOIN listings ON listings.id = shadow_trades.listing_id
        INNER JOIN products ON products.id = listings.product_id
-       WHERE shadow_trades.user_id = ? AND shadow_trades.data_mode = 'demo'
+       WHERE shadow_trades.user_id = ?
        ORDER BY shadow_trades.created_at DESC`,
     )
     .bind(user.id)
     .all<Record<string, string | number | null>>();
   return result.results.map((row) => ({
     id: String(row.id),
-    dealId: String(row.listing_id).replace(/^demo-listing:/, ''),
+    dealId: String(row.listing_id)
+      .replace(/^demo-listing:/, '')
+      .replace(/^amazon-shadow-listing:/, ''),
     name: String(row.name),
     detected: new Date(Number(row.created_at)).toISOString(),
     economics: JSON.parse(String(row.economics_json)) as DealEconomics,
@@ -449,7 +452,7 @@ export async function listShadowTrades(db: D1Database, user: RequestUser) {
           (JSON.parse(String(row.economics_json)) as DealEconomics).allInCost,
     status: String(row.status),
     followUp: new Date(Number(row.next_follow_up_at)).toISOString(),
-    dataMode: 'demo' as const,
+    dataMode: String(row.data_mode) as 'demo' | 'production',
   }));
 }
 
