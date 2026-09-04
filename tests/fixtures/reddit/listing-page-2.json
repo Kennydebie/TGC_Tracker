@@ -1,0 +1,22 @@
+{
+  "data": {
+    "after": null,
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "post-new-2",
+          "name": "t3_post-new-2",
+          "subreddit": "FixtureTCG",
+          "author": "fixture-reporter-b",
+          "created_utc": 1788530640,
+          "title": "Prismatic reprint rumor",
+          "selftext": "People say wave 2 but no official source exists.",
+          "score": 7,
+          "num_comments": 3,
+          "permalink": "/r/FixtureTCG/comments/post-new-2/example/"
+        }
+      }
+    ]
+  }
+}

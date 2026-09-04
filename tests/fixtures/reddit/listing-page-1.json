@@ -1,0 +1,22 @@
+{
+  "data": {
+    "after": "t3_fixture_after",
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "post-new-1",
+          "name": "t3_post-new-1",
+          "subreddit": "FixtureTCG",
+          "author": "fixture-reporter-a",
+          "created_utc": 1788530700,
+          "title": "Amazon DE Spiritforged restock",
+          "selftext": "Booster display live for €109 https://www.amazon.de/dp/B0RFTSPRT1",
+          "score": 21,
+          "num_comments": 8,
+          "permalink": "/r/FixtureTCG/comments/post-new-1/example/"
+        }
+      }
+    ]
+  }
+}

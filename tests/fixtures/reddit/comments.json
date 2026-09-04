@@ -1,0 +1,41 @@
+{
+  "data": {
+    "after": null,
+    "children": [
+      {
+        "kind": "t1",
+        "data": {
+          "id": "comment-new-1",
+          "subreddit": "FixtureTCG",
+          "author": "fixture-commenter",
+          "created_utc": 1788530760,
+          "body": "Pokémon 151 booster bundle deal at €39.99",
+          "score": 4,
+          "permalink": "/r/FixtureTCG/comments/thread/comment-new-1/"
+        }
+      },
+      {
+        "kind": "t1",
+        "data": {
+          "id": "comment-deleted",
+          "subreddit": "FixtureTCG",
+          "author": "[deleted]",
+          "created_utc": 1788530750,
+          "body": "[deleted]",
+          "score": 0
+        }
+      },
+      {
+        "kind": "t1",
+        "data": {
+          "id": "comment-removed",
+          "subreddit": "FixtureTCG",
+          "author": "fixture-user",
+          "created_utc": 1788530740,
+          "body": "[removed]",
+          "removed_by_category": "moderator"
+        }
+      }
+    ]
+  }
+}

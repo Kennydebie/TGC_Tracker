@@ -848,3 +848,503 @@ export const auditLogs = sqliteTable(
     index('idx_audit_user_created').on(table.userId, table.createdAt),
   ],
 );
+
+export const communitySources = sqliteTable(
+  'community_sources',
+  {
+    id: text('id').primaryKey(),
+    platform: text('platform').notNull(),
+    name: text('name').notNull(),
+    externalCommunityId: text('external_community_id').notNull(),
+    externalChannelId: text('external_channel_id'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+    gamesJson: text('games_json').notNull().default('[]'),
+    categoriesJson: text('categories_json').notNull().default('[]'),
+    reliabilityScoreBps: integer('reliability_score_bps'),
+    status: text('status').notNull().default('disabled'),
+    lastSignalAt: integer('last_signal_at', { mode: 'timestamp_ms' }),
+    lastError: text('last_error'),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_community_source_external').on(
+      table.platform,
+      table.externalCommunityId,
+      table.externalChannelId,
+    ),
+    index('idx_community_source_enabled').on(table.platform, table.enabled),
+  ],
+);
+
+export const communitySourceConfigs = sqliteTable(
+  'community_source_configs',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => communitySources.id, { onDelete: 'cascade' }),
+    userId: text('user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
+    scanIntervalMinutes: integer('scan_interval_minutes'),
+    cursorJson: text('cursor_json').notNull().default('{}'),
+    configJson: text('config_json').notNull().default('{}'),
+    rawRetentionHours: integer('raw_retention_hours').notNull().default(24),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_community_source_config_source_user').on(
+      table.sourceId,
+      table.userId,
+    ),
+  ],
+);
+
+export const communitySignals = sqliteTable(
+  'community_signals',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => communitySources.id),
+    externalId: text('external_id').notNull(),
+    platform: text('platform').notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    canonicalProductId: text('canonical_product_id').references(
+      () => products.id,
+    ),
+    authorReliabilityId: text('author_reliability_id'),
+    signalType: text('signal_type').notNull(),
+    priceCents: integer('price_cents'),
+    currency: text('currency'),
+    retailerMention: text('retailer_mention'),
+    marketplaceMention: text('marketplace_mention'),
+    countryMention: text('country_mention'),
+    regionMention: text('region_mention'),
+    language: text('language'),
+    quantity: integer('quantity'),
+    urlsJson: text('urls_json').notNull().default('[]'),
+    restockFlag: integer('restock_flag', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    reprintFlag: integer('reprint_flag', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    releaseFlag: integer('release_flag', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    scarcityFlag: integer('scarcity_flag', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    fraudWarningFlag: integer('fraud_warning_flag', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    sentiment: text('sentiment').notNull(),
+    intent: text('intent').notNull(),
+    confidenceBps: integer('confidence_bps').notNull(),
+    verificationStatus: text('verification_status')
+      .notNull()
+      .default('unverified'),
+    officialReference: integer('official_reference', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    unresolved: integer('unresolved', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    textHash: text('text_hash').notNull(),
+    rawExcerpt: text('raw_excerpt'),
+    rawExpiresAt: integer('raw_expires_at', { mode: 'timestamp_ms' }),
+    dataMode: text('data_mode').notNull().default('production'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_community_signal_source_external').on(
+      table.sourceId,
+      table.externalId,
+    ),
+    index('idx_community_signal_product_time').on(
+      table.canonicalProductId,
+      table.occurredAt,
+    ),
+    index('idx_community_signal_type_time').on(
+      table.signalType,
+      table.occurredAt,
+    ),
+    index('idx_community_signal_unresolved').on(
+      table.unresolved,
+      table.confidenceBps,
+    ),
+  ],
+);
+
+export const communitySignalEntities = sqliteTable(
+  'community_signal_entities',
+  {
+    id: text('id').primaryKey(),
+    signalId: text('signal_id')
+      .notNull()
+      .references(() => communitySignals.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    value: text('value').notNull(),
+    confidenceBps: integer('confidence_bps').notNull(),
+    evidenceStart: integer('evidence_start'),
+    evidenceEnd: integer('evidence_end'),
+  },
+  (table) => [
+    index('idx_community_entity_signal').on(table.signalId),
+    index('idx_community_entity_kind_value').on(table.kind, table.value),
+  ],
+);
+
+export const communitySignalEvents = sqliteTable(
+  'community_signal_events',
+  {
+    id: text('id').primaryKey(),
+    dedupeKey: text('dedupe_key').notNull(),
+    canonicalProductId: text('canonical_product_id').references(
+      () => products.id,
+    ),
+    signalType: text('signal_type').notNull(),
+    retailer: text('retailer'),
+    marketplace: text('marketplace'),
+    priceCents: integer('price_cents'),
+    currency: text('currency'),
+    firstDetectedAt: integer('first_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    lastDetectedAt: integer('last_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    mentionCount: integer('mention_count').notNull().default(1),
+    uniqueAuthorCount: integer('unique_author_count').notNull().default(0),
+    uniqueCommunityCount: integer('unique_community_count')
+      .notNull()
+      .default(1),
+    platformsJson: text('platforms_json').notNull().default('[]'),
+    sourceIdsJson: text('source_ids_json').notNull().default('[]'),
+    verificationStatus: text('verification_status')
+      .notNull()
+      .default('unverified'),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_community_event_dedupe').on(table.dedupeKey),
+    index('idx_community_event_product_time').on(
+      table.canonicalProductId,
+      table.lastDetectedAt,
+    ),
+  ],
+);
+
+export const communityEventSignals = sqliteTable(
+  'community_event_signals',
+  {
+    eventId: text('event_id')
+      .notNull()
+      .references(() => communitySignalEvents.id, { onDelete: 'cascade' }),
+    signalId: text('signal_id')
+      .notNull()
+      .references(() => communitySignals.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_community_event_signal').on(table.eventId, table.signalId),
+    index('idx_community_event_signals_signal').on(table.signalId),
+  ],
+);
+
+export const communityProductMomentum = sqliteTable(
+  'community_product_momentum',
+  {
+    id: text('id').primaryKey(),
+    canonicalProductId: text('canonical_product_id')
+      .notNull()
+      .references(() => products.id),
+    calculatedAt: integer('calculated_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    mentions15m: integer('mentions_15m').notNull().default(0),
+    mentions1h: integer('mentions_1h').notNull().default(0),
+    mentions6h: integer('mentions_6h').notNull().default(0),
+    mentions24h: integer('mentions_24h').notNull().default(0),
+    mentions7d: integer('mentions_7d').notNull().default(0),
+    uniqueAuthors: integer('unique_authors').notNull().default(0),
+    uniqueCommunities: integer('unique_communities').notNull().default(0),
+    momentumScore: integer('momentum_score').notNull(),
+    divergenceScore: integer('divergence_score').notNull(),
+    hypeRiskScore: integer('hype_risk_score').notNull(),
+    classification: text('classification').notNull(),
+    metricsJson: text('metrics_json').notNull().default('{}'),
+    dataMode: text('data_mode').notNull().default('production'),
+  },
+  (table) => [
+    index('idx_community_momentum_product_time').on(
+      table.canonicalProductId,
+      table.calculatedAt,
+    ),
+    index('idx_community_momentum_score_time').on(
+      table.momentumScore,
+      table.calculatedAt,
+    ),
+  ],
+);
+
+export const communityAuthorReliability = sqliteTable(
+  'community_author_reliability',
+  {
+    id: text('id').primaryKey(),
+    platform: text('platform').notNull(),
+    pseudonymousAuthorId: text('pseudonymous_author_id').notNull(),
+    signalsSubmitted: integer('signals_submitted').notNull().default(0),
+    signalsVerified: integer('signals_verified').notNull().default(0),
+    signalsFalse: integer('signals_false').notNull().default(0),
+    signalsExpired: integer('signals_expired').notNull().default(0),
+    signalsPriceChangedBeforeVerification: integer(
+      'signals_price_changed_before_verification',
+    )
+      .notNull()
+      .default(0),
+    reliabilityScoreBps: integer('reliability_score_bps'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_community_author_platform_hash').on(
+      table.platform,
+      table.pseudonymousAuthorId,
+    ),
+  ],
+);
+
+export const communitySourceReliability = sqliteTable(
+  'community_source_reliability',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => communitySources.id, { onDelete: 'cascade' }),
+    signalsSubmitted: integer('signals_submitted').notNull().default(0),
+    signalsVerified: integer('signals_verified').notNull().default(0),
+    signalsFalse: integer('signals_false').notNull().default(0),
+    medianLeadMinutes: integer('median_lead_minutes'),
+    reliabilityScoreBps: integer('reliability_score_bps'),
+    calculatedAt: integer('calculated_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_community_source_reliability_source').on(table.sourceId),
+  ],
+);
+
+export const communityVerifications = sqliteTable(
+  'community_verifications',
+  {
+    id: text('id').primaryKey(),
+    eventId: text('event_id')
+      .notNull()
+      .references(() => communitySignalEvents.id, { onDelete: 'cascade' }),
+    status: text('status').notNull(),
+    marketSource: text('market_source'),
+    marketListingId: text('market_listing_id'),
+    marketUrl: text('market_url'),
+    communityDetectedAt: integer('community_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    marketVerifiedAt: integer('market_verified_at', {
+      mode: 'timestamp_ms',
+    }),
+    officialSourceDetectedAt: integer('official_source_detected_at', {
+      mode: 'timestamp_ms',
+    }),
+    priceAtCommunityDetectionCents: integer(
+      'price_at_community_detection_cents',
+    ),
+    priceAtVerificationCents: integer('price_at_verification_cents'),
+    deliveredPriceCents: integer('delivered_price_cents'),
+    conservativeExitCents: integer('conservative_exit_cents'),
+    predictedProfitCents: integer('predicted_profit_cents'),
+    roiBps: integer('roi_bps'),
+    confidenceGrade: text('confidence_grade'),
+    detailsJson: text('details_json').notNull().default('{}'),
+    dataMode: text('data_mode').notNull().default('production'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_community_verification_event_time').on(
+      table.eventId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const communityLeadTime = sqliteTable(
+  'community_lead_time',
+  {
+    id: text('id').primaryKey(),
+    verificationId: text('verification_id')
+      .notNull()
+      .references(() => communityVerifications.id, { onDelete: 'cascade' }),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => communitySources.id),
+    communityDetectedAt: integer('community_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    marketSourceDetectedAt: integer('market_source_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    officialSourceDetectedAt: integer('official_source_detected_at', {
+      mode: 'timestamp_ms',
+    }),
+    leadTimeMinutes: integer('lead_time_minutes').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_community_lead_source_time').on(table.sourceId, table.createdAt),
+  ],
+);
+
+export const communityHypeMetrics = sqliteTable(
+  'community_hype_metrics',
+  {
+    id: text('id').primaryKey(),
+    eventId: text('event_id')
+      .notNull()
+      .references(() => communitySignalEvents.id, { onDelete: 'cascade' }),
+    calculatedAt: integer('calculated_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    hypeRiskScore: integer('hype_risk_score').notNull(),
+    lowHistoryAuthorRatioBps: integer('low_history_author_ratio_bps')
+      .notNull()
+      .default(0),
+    repeatedTextRatioBps: integer('repeated_text_ratio_bps')
+      .notNull()
+      .default(0),
+    repeatedLinkRatioBps: integer('repeated_link_ratio_bps')
+      .notNull()
+      .default(0),
+    dominantSourceRatioBps: integer('dominant_source_ratio_bps')
+      .notNull()
+      .default(0),
+    crossPostRatioBps: integer('cross_post_ratio_bps').notNull().default(0),
+    indicatorsJson: text('indicators_json').notNull().default('[]'),
+  },
+  (table) => [
+    index('idx_community_hype_event_time').on(
+      table.eventId,
+      table.calculatedAt,
+    ),
+  ],
+);
+
+export const communityScanRuns = sqliteTable(
+  'community_scan_runs',
+  {
+    id: text('id').primaryKey(),
+    platform: text('platform').notNull(),
+    status: text('status').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
+    eventsReceived: integer('events_received').notNull().default(0),
+    messagesFiltered: integer('messages_filtered').notNull().default(0),
+    signalsCreated: integer('signals_created').notNull().default(0),
+    duplicatesClustered: integer('duplicates_clustered').notNull().default(0),
+    productsMatched: integer('products_matched').notNull().default(0),
+    signalsVerified: integer('signals_verified').notNull().default(0),
+    signalsRejected: integer('signals_rejected').notNull().default(0),
+    alertsEmitted: integer('alerts_emitted').notNull().default(0),
+    rateLimitRemaining: integer('rate_limit_remaining'),
+    classificationLatencyMs: integer('classification_latency_ms'),
+    errorCode: text('error_code'),
+    errorDetail: text('error_detail'),
+  },
+  (table) => [
+    index('idx_community_scan_platform_time').on(
+      table.platform,
+      table.startedAt,
+    ),
+  ],
+);
+
+export const communityWatchRules = sqliteTable(
+  'community_watch_rules',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    canonicalProductId: text('canonical_product_id')
+      .notNull()
+      .references(() => products.id),
+    minimumMomentum: integer('minimum_momentum').notNull().default(80),
+    minimumDiscordMentions: integer('minimum_discord_mentions')
+      .notNull()
+      .default(0),
+    minimumRedditMentions: integer('minimum_reddit_mentions')
+      .notNull()
+      .default(0),
+    minimumDivergence: integer('minimum_divergence').notNull().default(70),
+    maximumHypeRisk: integer('maximum_hype_risk').notNull().default(50),
+    minimumRestockMentions: integer('minimum_restock_mentions')
+      .notNull()
+      .default(0),
+    minimumIndependentConfirmations: integer(
+      'minimum_independent_confirmations',
+    )
+      .notNull()
+      .default(2),
+    officialCatalystRequired: integer('official_catalyst_required', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_community_watch_user_product').on(
+      table.userId,
+      table.canonicalProductId,
+    ),
+  ],
+);
+
+export const communityShadowEvaluations = sqliteTable(
+  'community_shadow_evaluations',
+  {
+    id: text('id').primaryKey(),
+    shadowTradeId: text('shadow_trade_id')
+      .notNull()
+      .references(() => shadowTrades.id, { onDelete: 'cascade' }),
+    communityEventId: text('community_event_id')
+      .notNull()
+      .references(() => communitySignalEvents.id),
+    communityDetectedAt: integer('community_detected_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    marketVerifiedAt: integer('market_verified_at', {
+      mode: 'timestamp_ms',
+    }),
+    priceAtCommunityDetectionCents: integer(
+      'price_at_community_detection_cents',
+    ),
+    priceAtVerificationCents: integer('price_at_verification_cents'),
+    priceAfter1hCents: integer('price_after_1h_cents'),
+    priceAfter24hCents: integer('price_after_24h_cents'),
+    priceAfter7dCents: integer('price_after_7d_cents'),
+    communityMomentum: integer('community_momentum').notNull(),
+    divergenceScore: integer('divergence_score').notNull(),
+    hypeRiskScore: integer('hype_risk_score').notNull(),
+    sourceReliability: integer('source_reliability').notNull(),
+    economicsJson: text('economics_json').notNull().default('{}'),
+    dataMode: text('data_mode').notNull().default('production'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_community_shadow_trade').on(table.shadowTradeId),
+    index('idx_community_shadow_event').on(table.communityEventId),
+  ],
+);

@@ -9,5 +9,18 @@ declare namespace Cloudflare {
     KEEPA_DISCOVERY_INTERVAL_MINUTES?: string;
     AMAZON_DEFAULT_MARKETPLACE?: string;
     AMAZON_MARKETS?: string;
+    REDDIT_CLIENT_ID?: string;
+    REDDIT_CLIENT_SECRET?: string;
+    REDDIT_USER_AGENT?: string;
+    REDDIT_COMMUNITIES?: string;
+    REDDIT_SCAN_INTERVAL_MINUTES?: string;
+    DISCORD_BOT_TOKEN?: string;
+    DISCORD_APPLICATION_ID?: string;
+    DISCORD_GUILD_ALLOWLIST?: string;
+    DISCORD_CHANNEL_ALLOWLIST?: string;
+    DISCORD_INGEST_URL?: string;
+    COMMUNITY_INGEST_SECRET?: string;
+    COMMUNITY_AUTHOR_HASH_SALT?: string;
+    COMMUNITY_RAW_RETENTION_HOURS?: string;
   }
 }

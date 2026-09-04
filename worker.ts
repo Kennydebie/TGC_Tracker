@@ -2,6 +2,7 @@ import vinextHandler from 'vinext/server/fetch-handler';
 
 import { runMarktplaatsScout } from './lib/services/marktplaats-scout.ts';
 import { runAmazonScout } from './lib/services/amazon-scout.ts';
+import { runRedditCommunityScan } from './lib/services/community-radar.ts';
 import {
   AMAZON_MARKETPLACES,
   type AmazonMarketplaceCode,
@@ -63,6 +64,18 @@ const worker = {
           console.log(
             JSON.stringify({
               service: 'marktplaats-scout',
+              event: 'scheduled_scan_finished',
+              ...result,
+            }),
+          );
+        }),
+      );
+    if (controller.cron !== AMAZON_DISCOVERY_CRON)
+      ctx.waitUntil(
+        runRedditCommunityScan({ db: env.DB, env }).then((result) => {
+          console.log(
+            JSON.stringify({
+              service: 'community-reddit',
               event: 'scheduled_scan_finished',
               ...result,
             }),

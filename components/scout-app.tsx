@@ -29,6 +29,7 @@ import {
   Menu,
   PackageCheck,
   Radar,
+  RadioTower,
   RefreshCw,
   ExternalLink,
   Scale,
@@ -51,6 +52,7 @@ import { ScoutCrest, RuneDivider } from '@/components/brand';
 import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { MarktplaatsScout } from '@/components/marktplaats-scout';
 import { AmazonScout } from '@/components/amazon-scout';
+import { CommunityRadar } from '@/components/community-radar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -121,6 +123,7 @@ type Section =
   | 'deals'
   | 'marktplaats'
   | 'amazon'
+  | 'community'
   | 'lot-lab'
   | 'market'
   | 'releases'
@@ -253,6 +256,13 @@ const navItems: {
     icon: ShoppingBag,
   },
   {
+    section: 'community',
+    label: 'Community Radar',
+    subtitle: 'Whispers & Signals',
+    href: '/community',
+    icon: RadioTower,
+  },
+  {
     section: 'lot-lab',
     label: 'Lot Lab',
     subtitle: 'Underwrite collections',
@@ -344,6 +354,10 @@ const pageMeta: Record<Section, { title: string; subtitle: string }> = {
   amazon: {
     title: 'Amazon Scout',
     subtitle: 'Merchant Realms',
+  },
+  community: {
+    title: 'Community Radar',
+    subtitle: 'Whispers & Signals',
   },
   'lot-lab': {
     title: 'Lot Lab',
@@ -882,6 +896,7 @@ export function ScoutApp({
           )}
           {section === 'marktplaats' && <MarktplaatsScout />}
           {section === 'amazon' && <AmazonScout />}
+          {section === 'community' && <CommunityRadar />}
           {section === 'lot-lab' && <LotLab onNotice={setNotice} />}
           {section === 'market' && (
             <MarketPage

@@ -13,6 +13,7 @@ export default async function SectionPage({
     'deals',
     'marktplaats',
     'amazon',
+    'community',
     'lot-lab',
     'market',
     'releases',

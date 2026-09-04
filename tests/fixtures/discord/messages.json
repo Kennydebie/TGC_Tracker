@@ -1,0 +1,42 @@
+{
+  "allowedGuild": {
+    "id": "900000000000000001",
+    "guild_id": "800000000000000001",
+    "channel_id": "700000000000000001",
+    "content": "Amazon DE Spiritforged booster display restocked €109 https://www.amazon.de/dp/B0RFTSPRT1",
+    "timestamp": "2026-09-04T14:03:00.000Z",
+    "author": { "id": "600000000000000001", "bot": false }
+  },
+  "blockedGuild": {
+    "id": "900000000000000002",
+    "guild_id": "800000000000000099",
+    "channel_id": "700000000000000001",
+    "content": "Spiritforged restock €109",
+    "timestamp": "2026-09-04T14:03:01.000Z",
+    "author": { "id": "600000000000000002", "bot": false }
+  },
+  "blockedChannel": {
+    "id": "900000000000000003",
+    "guild_id": "800000000000000001",
+    "channel_id": "700000000000000099",
+    "content": "Spiritforged restock €109",
+    "timestamp": "2026-09-04T14:03:02.000Z",
+    "author": { "id": "600000000000000003", "bot": false }
+  },
+  "contentUnavailable": {
+    "id": "900000000000000004",
+    "guild_id": "800000000000000001",
+    "channel_id": "700000000000000001",
+    "content": "",
+    "timestamp": "2026-09-04T14:03:03.000Z",
+    "author": { "id": "600000000000000004", "bot": false }
+  },
+  "irrelevant": {
+    "id": "900000000000000005",
+    "guild_id": "800000000000000001",
+    "channel_id": "700000000000000001",
+    "content": "Anyone playing games tonight?",
+    "timestamp": "2026-09-04T14:03:04.000Z",
+    "author": { "id": "600000000000000005", "bot": false }
+  }
+}
