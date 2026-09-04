@@ -60,3 +60,11 @@ export function getEnabledConnectors(): SourceConnector[] {
     item.enabled && item.connector ? [item.connector] : [],
   );
 }
+
+export function getConnector(id: string): SourceConnector | null {
+  return connectorRegistry.find((item) => item.id === id)?.connector ?? null;
+}
+
+export function hasEbayCredentials(): boolean {
+  return ebayEnabled;
+}

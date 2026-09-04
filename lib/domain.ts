@@ -6,6 +6,23 @@ export type Liquidity =
   | 'Illiquid'
   | 'Unknown';
 export type DealStrategy = 'Quick flip' | 'Collection' | 'Long-term sealed';
+export type DataMode = 'demo' | 'production';
+export type AvailabilityStatus =
+  | 'available'
+  | 'unavailable'
+  | 'price_changed'
+  | 'shipping_changed'
+  | 'unknown';
+
+export const DEAL_ECONOMICS_MODEL_VERSION = 'deal-economics-v2' as const;
+export const QUICK_FLIP_GATE = {
+  matchConfidence: 90,
+  minimumProfit: 25,
+  minimumRoi: 0.2,
+  minimumProfitPerHour: 20,
+  maximumHoldingDays: 90,
+  maximumRiskScore: 59,
+} as const;
 
 export type DealInput = {
   itemPrice: number;
@@ -29,6 +46,8 @@ export type DealInput = {
 };
 
 export type DealEconomics = DealInput & {
+  modelVersion: typeof DEAL_ECONOMICS_MODEL_VERSION;
+  nonItemAcquisitionCosts: number;
   allInCost: number;
   conservativeNetExit: number;
   conservativeProfit: number;
@@ -36,6 +55,7 @@ export type DealEconomics = DealInput & {
   profitPerHour: number;
   capitalVelocity: number;
   maximumItemPrice: number;
+  maximumAllInCost: number;
 };
 
 export type Deal = {
@@ -46,6 +66,13 @@ export type Deal = {
   set: string;
   productType: string;
   source: string;
+  dataMode: DataMode;
+  sourceListingUrl: string;
+  sourceListingId: string;
+  sourceMarketplace: string;
+  lastVerifiedAt: string;
+  availabilityStatus: AvailabilityStatus;
+  detectedAt: string;
   location: string;
   language: string;
   condition: string;
@@ -138,9 +165,12 @@ export function calculateEconomics(input: DealInput): DealEconomics {
     input.expectedHoldingDays > 0 ? roi / input.expectedHoldingDays : 0;
   const maximumItemPrice =
     conservativeNetExit - input.requiredProfit - acquisitionCosts;
+  const maximumAllInCost = conservativeNetExit - input.requiredProfit;
 
   return {
     ...input,
+    modelVersion: DEAL_ECONOMICS_MODEL_VERSION,
+    nonItemAcquisitionCosts: roundMoney(acquisitionCosts),
     allInCost: roundMoney(allInCost),
     conservativeNetExit: roundMoney(conservativeNetExit),
     conservativeProfit: roundMoney(conservativeProfit),
@@ -148,6 +178,30 @@ export function calculateEconomics(input: DealInput): DealEconomics {
     profitPerHour: roundMoney(profitPerHour),
     capitalVelocity,
     maximumItemPrice: roundMoney(maximumItemPrice),
+    maximumAllInCost: roundMoney(maximumAllInCost),
+  };
+}
+
+export function itemPriceWithinMaximum(economics: DealEconomics): boolean {
+  return economics.itemPrice <= economics.maximumItemPrice;
+}
+
+export function allInCostWithinMaximum(economics: DealEconomics): boolean {
+  return economics.allInCost <= economics.maximumAllInCost;
+}
+
+export function economicsCopy(economics: DealEconomics) {
+  return {
+    itemPrice: money(economics.itemPrice),
+    acquisitionCosts: money(economics.nonItemAcquisitionCosts),
+    allInCost: money(economics.allInCost),
+    conservativeNetExit: money(economics.conservativeNetExit),
+    requiredProfit: money(economics.requiredProfit),
+    maximumItemPrice: money(economics.maximumItemPrice),
+    maximumAllInCost: money(economics.maximumAllInCost),
+    conservativeProfit: money(economics.conservativeProfit),
+    roi: percent(economics.roi),
+    profitPerHour: money(economics.profitPerHour),
   };
 }
 
@@ -163,12 +217,12 @@ export function confidenceGrade(
 
 export function qualifiesForQuickFlip(deal: Deal): boolean {
   return (
-    deal.matchConfidence >= 90 &&
-    deal.economics.conservativeProfit >= 25 &&
-    deal.economics.roi >= 0.2 &&
-    deal.economics.profitPerHour >= 20 &&
-    deal.economics.expectedHoldingDays <= 90 &&
-    deal.riskScore < 60 &&
+    deal.matchConfidence >= QUICK_FLIP_GATE.matchConfidence &&
+    deal.economics.conservativeProfit >= QUICK_FLIP_GATE.minimumProfit &&
+    deal.economics.roi >= QUICK_FLIP_GATE.minimumRoi &&
+    deal.economics.profitPerHour >= QUICK_FLIP_GATE.minimumProfitPerHour &&
+    deal.economics.expectedHoldingDays <= QUICK_FLIP_GATE.maximumHoldingDays &&
+    deal.riskScore <= QUICK_FLIP_GATE.maximumRiskScore &&
     deal.confidenceGrade !== 'D' &&
     deal.exitChannel.length > 0
   );

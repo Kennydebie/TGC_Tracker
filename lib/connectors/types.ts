@@ -27,8 +27,19 @@ export type RawSourceRecord = {
 export type NormalisedOffer = {
   sourceId: string;
   externalId: string;
+  sourceListingId: string;
+  sourceMarketplace: string;
   title: string;
   url: string;
+  sourceListingUrl: string;
+  detectedAt: string;
+  lastVerifiedAt: string;
+  availabilityStatus:
+    | 'available'
+    | 'unavailable'
+    | 'price_changed'
+    | 'shipping_changed'
+    | 'unknown';
   itemPrice: number;
   shipping: number | null;
   currency: string;
@@ -56,5 +67,6 @@ export interface SourceConnector {
   healthCheck(): Promise<HealthResult>;
   scan(input: ScanInput): Promise<RawSourceRecord[]>;
   normalise(record: RawSourceRecord): Promise<NormalisedOffer[]>;
+  getListing?(sourceListingId: string): Promise<NormalisedOffer | null>;
   getPolicy(): SourcePolicy;
 }

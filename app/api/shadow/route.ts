@@ -1,9 +1,13 @@
-import { shadowTrades } from '@/lib/fixtures';
+import { getD1 } from '@/db';
+import { listShadowTrades } from '@/lib/repositories/user-state';
+import { authenticationRequired, getRequestUser } from '@/lib/server/user';
 
-export function GET() {
+export async function GET(request: Request) {
+  const user = getRequestUser(request);
+  if (!user) return authenticationRequired();
   return Response.json({
-    mode: 'demo',
-    data: shadowTrades,
+    dataMode: 'demo',
+    data: await listShadowTrades(getD1(), user),
     metrics: {
       executabilityRate: 0.82,
       qualifiedDealPrecision: 0.71,

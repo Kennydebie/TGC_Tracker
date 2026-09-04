@@ -1,5 +1,8 @@
+import { getD1 } from '@/db';
 import { deals } from '@/lib/fixtures';
+import { createShadowTrade } from '@/lib/repositories/user-state';
 import { rejectCrossSiteMutation } from '@/lib/security';
+import { authenticationRequired, getRequestUser } from '@/lib/server/user';
 
 export async function POST(
   request: Request,
@@ -7,24 +10,15 @@ export async function POST(
 ) {
   const blocked = rejectCrossSiteMutation(request);
   if (blocked) return blocked;
+  const user = getRequestUser(request);
+  if (!user) return authenticationRequired();
   const { id } = await params;
   const deal = deals.find((item) => item.id === id);
   if (!deal) return Response.json({ error: 'Deal not found' }, { status: 404 });
-  const createdAt = Date.now();
   return Response.json(
     {
-      mode: 'demo',
-      data: {
-        id: crypto.randomUUID(),
-        dealId: id,
-        detectedPrice: deal.economics.itemPrice,
-        executablePrice: deal.economics.itemPrice,
-        predictedProfit: deal.economics.conservativeProfit,
-        status: 'open',
-        followUps: [7, 30, 90].map((days) =>
-          new Date(createdAt + days * 86_400_000).toISOString(),
-        ),
-      },
+      dataMode: 'demo',
+      data: await createShadowTrade(getD1(), user, deal),
     },
     { status: 201 },
   );

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { calculateEconomics, confidenceGrade } from '../lib/domain.ts';
+import {
+  allInCostWithinMaximum,
+  calculateEconomics,
+  confidenceGrade,
+  itemPriceWithinMaximum,
+} from '../lib/domain.ts';
+import { validateSourceListingUrl } from '../lib/listing-url.ts';
 import {
   detectMisleadingTitle,
   normaliseLanguage,
@@ -40,8 +46,56 @@ void test('calculates all-in cost, conservative net exit, profit and maximum ite
   assert.equal(result.conservativeNetExit, 130);
   assert.equal(result.conservativeProfit, 20);
   assert.equal(result.maximumItemPrice, 95);
+  assert.equal(result.maximumAllInCost, 105);
+  assert.equal(result.nonItemAcquisitionCosts, 10);
   assert.equal(result.profitPerHour, 13.33);
   assert.equal(Math.round(result.roi * 10_000), 1818);
+});
+
+void test('uses the item and all-in maximums against their matching cost basis', () => {
+  const result = calculateEconomics({
+    ...baseInput,
+    itemPrice: 118,
+    inboundShipping: 6.95,
+    buyerFees: 1.5,
+    paymentFees: 0,
+    expectedSalePrice: 195,
+    sellerFees: 19,
+    exitPaymentFees: 2.5,
+    outboundShipping: 7.25,
+    packaging: 1.8,
+    expectedReturnLoss: 3.5,
+    sellingLabor: 4,
+    liquidityHaircut: 2,
+    estimatedHours: 1.1,
+    expectedHoldingDays: 18,
+  });
+  assert.equal(result.itemPrice, 118);
+  assert.equal(result.nonItemAcquisitionCosts, 8.45);
+  assert.equal(result.allInCost, 126.45);
+  assert.equal(result.conservativeNetExit, 154.95);
+  assert.equal(result.requiredProfit, 25);
+  assert.equal(result.maximumItemPrice, 121.5);
+  assert.equal(result.maximumAllInCost, 129.95);
+  assert.equal(result.conservativeProfit, 28.5);
+  assert.equal(Math.round(result.roi * 10_000), 2254);
+  assert.equal(itemPriceWithinMaximum(result), true);
+  assert.equal(allInCostWithinMaximum(result), true);
+});
+
+void test('validates original listing URLs against source-specific allowlists', () => {
+  assert.equal(
+    validateSourceListingUrl('ebay', 'https://www.ebay.nl/itm/123').hostname,
+    'www.ebay.nl',
+  );
+  assert.throws(
+    () => validateSourceListingUrl('ebay', 'https://example.com/itm/123'),
+    /allowlisted/,
+  );
+  assert.throws(
+    () => validateSourceListingUrl('ebay', 'http://www.ebay.nl/itm/123'),
+    /HTTPS/,
+  );
 });
 
 void test('preserves a negative fee-trap outcome instead of presenting a headline discount', () => {

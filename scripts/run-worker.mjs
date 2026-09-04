@@ -1,3 +1,5 @@
+import { runConfiguredScan } from '../lib/services/scanning.ts';
+
 const runOnce = process.argv.includes('--once');
 
 function log(event, fields = {}) {
@@ -7,33 +9,38 @@ function log(event, fields = {}) {
 }
 
 async function scan() {
-  const started = Date.now();
-  const jobId = crypto.randomUUID();
-  log('scan.started', {
-    jobId,
-    source: 'fixture-market',
-    connector: 'FixtureConnector',
-  });
-  const recordsFetched = 5;
-  const recordsNormalised = 5;
-  const matches = 4;
-  const unmatched = 1;
-  const alerts = 1;
-  log('scan.finished', {
-    jobId,
-    source: 'fixture-market',
-    connector: 'FixtureConnector',
-    durationMs: Date.now() - started,
-    outcome: 'success',
-    retry: 0,
-    recordsFetched,
-    recordsNormalised,
-    matches,
-    unmatched,
-    alerts,
-    errors: 0,
-    rateLimitState: 'not_applicable',
-  });
+  log('scan.started');
+  try {
+    const summary = await runConfiguredScan();
+    for (const connector of summary.connectors) {
+      log('scan.source_finished', {
+        jobId: summary.jobId,
+        source: connector.source,
+        fetched: connector.fetched,
+        normalised: connector.normalised,
+        matched: connector.matched,
+        rejected: connector.rejected,
+        alerted: connector.alerted,
+        errors: connector.errors,
+      });
+    }
+    log('scan.finished', {
+      jobId: summary.jobId,
+      durationMs: summary.durationMs,
+      outcome: summary.connectors.some((item) => item.errors.length)
+        ? 'partial'
+        : 'success',
+      ...summary.totals,
+      ebayCredentials: summary.credentials.ebay,
+      queries: summary.queries,
+    });
+  } catch (error) {
+    log('scan.failed', {
+      outcome: 'failed',
+      error: error instanceof Error ? error.message : 'Unknown scan failure',
+    });
+    if (runOnce) process.exitCode = 1;
+  }
 }
 
 await scan();

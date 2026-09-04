@@ -30,6 +30,7 @@ import {
   PackageCheck,
   Radar,
   RefreshCw,
+  ExternalLink,
   Scale,
   Search,
   ShieldAlert,
@@ -43,7 +44,7 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
 import { ScoutCrest, RuneDivider } from '@/components/brand';
@@ -97,7 +98,18 @@ import {
   shadowTrades,
   sources,
 } from '@/lib/fixtures';
-import { money, percent, qualifiesForQuickFlip, type Deal } from '@/lib/domain';
+import {
+  allInCostWithinMaximum,
+  calculateEconomics,
+  economicsCopy,
+  money,
+  percent,
+  QUICK_FLIP_GATE,
+  qualifiesForQuickFlip,
+  type Deal,
+  type DealEconomics,
+} from '@/lib/domain';
+import { isSafeSourceListingUrl } from '@/lib/listing-url';
 
 type Section =
   | 'dashboard'
@@ -121,6 +133,81 @@ type ScoutAppProps = {
   signInPath?: string;
   signOutPath?: string;
 };
+
+type ShadowTradeRow = {
+  id: string;
+  dealId: string;
+  name: string;
+  detected: string;
+  economics: DealEconomics;
+  laterSupportedNetExit: number | null;
+  status: string;
+  followUp: string;
+  dataMode: 'demo' | 'production';
+};
+
+type RecheckResult = {
+  availabilityStatus: Deal['availabilityStatus'];
+  lastVerifiedAt: string;
+  observedItemPrice?: number;
+  observedShipping?: number;
+  sourceListingUrl: string;
+  priceChanged: boolean;
+  shippingChanged: boolean;
+};
+
+type ReviewQueueItem = {
+  id: string;
+  type: string;
+  title: string;
+  source: string;
+  confidence: number;
+  age: string;
+  severity: string;
+  originalTitle: string;
+  imageUrl: string | null;
+  currentCandidate: string;
+  alternativeCandidates: string[];
+  quantity: number;
+  language: string;
+  condition: string;
+  productType: string;
+  riskFlags: string[];
+};
+
+type UserSettings = {
+  country: string;
+  postcode: string;
+  currency: 'EUR';
+  timezone: string;
+  localRadiusKm: number;
+  laborRate: number;
+  requiredRoi: number;
+  requiredProfit: number;
+};
+
+const defaultUserSettings: UserSettings = {
+  country: 'NL',
+  postcode: '',
+  currency: 'EUR',
+  timezone: 'Europe/Amsterdam',
+  localRadiusKm: 50,
+  laborRate: 18,
+  requiredRoi: 0.2,
+  requiredProfit: 25,
+};
+
+function verificationLabel(item: Deal) {
+  const status = item.availabilityStatus.replaceAll('_', ' ');
+  const checked = new Date(item.lastVerifiedAt);
+  const checkedLabel = Number.isNaN(checked.valueOf())
+    ? 'verification time unavailable'
+    : checked.toLocaleString('nl-NL', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+  return `${status} · checked ${checkedLabel}`;
+}
 
 const navItems: {
   section: Section;
@@ -286,6 +373,7 @@ export function ScoutApp({
   const section = validSections.has(initialSection as Section)
     ? (initialSection as Section)
     : 'dashboard';
+  const [dealRecords, setDealRecords] = useState<Deal[]>(deals);
   const [trackedIds, setTrackedIds] = useState(
     () => new Set(deals.filter((item) => item.tracked).map((item) => item.id)),
   );
@@ -297,19 +385,212 @@ export function ScoutApp({
   const [notice, setNotice] = useState(
     'Demo Mode uses fictional, isolated market records.',
   );
+  const [globalQuery, setGlobalQuery] = useState('');
+  const [pendingTrackIds, setPendingTrackIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [recheckingIds, setRecheckingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [shadowRows, setShadowRows] = useState<ShadowTradeRow[]>(shadowTrades);
 
-  const toggleTrack = (id: string) => {
-    setTrackedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-        setNotice('Removed from Watchtower.');
-      } else {
-        next.add(id);
-        setNotice('Added to Watchtower. Price and listing alerts are active.');
+  useEffect(() => {
+    document.documentElement.dataset.scoutHydrated = 'true';
+    return () => {
+      delete document.documentElement.dataset.scoutHydrated;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/deals')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Deals could not be loaded.');
+        return (await response.json()) as { data: Deal[] };
+      })
+      .then((payload) => {
+        if (!cancelled) setDealRecords(payload.data);
+      })
+      .catch(() => {
+        if (!cancelled)
+          setNotice(
+            'Live records are unavailable; isolated demo data remains visible.',
+          );
+      });
+    if (user) {
+      void Promise.all([
+        fetch('/api/watchlist').then(
+          async (response) => (await response.json()) as { dealIds?: string[] },
+        ),
+        fetch('/api/shadow').then(
+          async (response) =>
+            (await response.json()) as { data?: ShadowTradeRow[] },
+        ),
+      ]).then(([watchlist, shadow]) => {
+        if (cancelled) return;
+        if (Array.isArray(watchlist.dealIds))
+          setTrackedIds(new Set(watchlist.dealIds));
+        if (Array.isArray(shadow.data))
+          setShadowRows([...shadow.data, ...shadowTrades]);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const toggleTrack = useCallback(
+    async (id: string) => {
+      if (!user) {
+        setNotice('Sign in with ChatGPT before saving Watchtower changes.');
+        return;
       }
-      return next;
-    });
+      const currentlyTracked = trackedIds.has(id);
+      setPendingTrackIds((current) => new Set(current).add(id));
+      try {
+        const response = await fetch(
+          `/api/watchlist/${encodeURIComponent(id)}`,
+          {
+            method: currentlyTracked ? 'DELETE' : 'PUT',
+          },
+        );
+        const payload = (await response.json()) as {
+          tracked?: boolean;
+          error?: string;
+        };
+        if (!response.ok)
+          throw new Error(payload.error ?? 'Watchtower update failed');
+        setTrackedIds((current) => {
+          const next = new Set(current);
+          if (payload.tracked) next.add(id);
+          else next.delete(id);
+          return next;
+        });
+        setNotice(
+          payload.tracked ? 'Saved to Watchtower.' : 'Removed from Watchtower.',
+        );
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : 'Watchtower update failed',
+        );
+      } finally {
+        setPendingTrackIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [trackedIds, user],
+  );
+
+  const recheckDeal = async (
+    item: Deal,
+    openAfterRecheck = false,
+  ): Promise<RecheckResult | null> => {
+    setRecheckingIds((current) => new Set(current).add(item.id));
+    try {
+      const response = await fetch(
+        `/api/deals/${encodeURIComponent(item.id)}/recheck`,
+        { method: 'POST' },
+      );
+      const payload = (await response.json()) as RecheckResult & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(payload.error ?? 'Listing recheck failed');
+      setDealRecords((current) =>
+        current.map((deal) =>
+          deal.id === item.id
+            ? {
+                ...deal,
+                lastVerifiedAt: payload.lastVerifiedAt,
+                availabilityStatus: payload.availabilityStatus,
+                sourceListingUrl: payload.sourceListingUrl,
+                economics:
+                  payload.observedItemPrice == null
+                    ? deal.economics
+                    : {
+                        ...calculateEconomics({
+                          ...deal.economics,
+                          itemPrice: payload.observedItemPrice,
+                          inboundShipping:
+                            payload.observedShipping ??
+                            deal.economics.inboundShipping,
+                        }),
+                      },
+              }
+            : deal,
+        ),
+      );
+      setSelectedDeal((current) =>
+        current?.id === item.id
+          ? {
+              ...current,
+              lastVerifiedAt: payload.lastVerifiedAt,
+              availabilityStatus: payload.availabilityStatus,
+              sourceListingUrl: payload.sourceListingUrl,
+              economics:
+                payload.observedItemPrice == null
+                  ? current.economics
+                  : calculateEconomics({
+                      ...current.economics,
+                      itemPrice: payload.observedItemPrice,
+                      inboundShipping:
+                        payload.observedShipping ??
+                        current.economics.inboundShipping,
+                    }),
+            }
+          : current,
+      );
+      const state = payload.availabilityStatus.replaceAll('_', ' ');
+      setNotice(`Listing rechecked: ${state}.`);
+      if (
+        openAfterRecheck &&
+        payload.availabilityStatus !== 'unavailable' &&
+        item.dataMode === 'production' &&
+        isSafeSourceListingUrl(item.sourceMarketplace, payload.sourceListingUrl)
+      ) {
+        window.open(payload.sourceListingUrl, '_blank', 'noopener,noreferrer');
+      } else if (openAfterRecheck && item.dataMode === 'demo') {
+        setNotice(
+          'Demo listing rechecked. It has no external marketplace destination.',
+        );
+      }
+      return payload;
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Listing recheck failed',
+      );
+      return null;
+    } finally {
+      setRecheckingIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const shadowBuy = async (item: Deal) => {
+    if (!user) {
+      setNotice('Sign in with ChatGPT before creating a Shadow Mode trade.');
+      return;
+    }
+    const response = await fetch(
+      `/api/deals/${encodeURIComponent(item.id)}/shadow-buy`,
+      { method: 'POST' },
+    );
+    const payload = (await response.json()) as {
+      data?: ShadowTradeRow;
+      error?: string;
+    };
+    if (!response.ok || !payload.data) {
+      setNotice(payload.error ?? 'Shadow trade could not be saved.');
+      return;
+    }
+    setShadowRows((current) => [payload.data!, ...current]);
+    setNotice(`${item.canonicalProduct} saved to Shadow Mode.`);
   };
 
   useEffect(() => {
@@ -337,7 +618,7 @@ export function ScoutApp({
       },
       annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute() {
-        return deals.filter(qualifiesForQuickFlip).map((item) => ({
+        return dealRecords.filter(qualifiesForQuickFlip).map((item) => ({
           id: item.id,
           product: item.canonicalProduct,
           allInCost: item.economics.allInCost,
@@ -365,7 +646,7 @@ export function ScoutApp({
           typeof input === 'object' && input && 'dealId' in input
             ? String(input.dealId)
             : '';
-        const item = deals.find((candidate) => candidate.id === dealId);
+        const item = dealRecords.find((candidate) => candidate.id === dealId);
         if (!item) throw new Error('Unknown dealId');
         setSelectedDeal(item);
         return {
@@ -390,20 +671,19 @@ export function ScoutApp({
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
+      async execute(input) {
         const dealId =
           typeof input === 'object' && input && 'dealId' in input
             ? String(input.dealId)
             : '';
-        const item = deals.find((candidate) => candidate.id === dealId);
+        const item = dealRecords.find((candidate) => candidate.id === dealId);
         if (!item) throw new Error('Unknown dealId');
-        setTrackedIds((current) => new Set(current).add(dealId));
-        setNotice(`${item.canonicalProduct} added to Watchtower.`);
-        return { dealId, tracked: true };
+        await toggleTrack(dealId);
+        return { dealId, tracked: true, persisted: Boolean(user) };
       },
     });
     return () => lifecycle.abort();
-  }, []);
+  }, [dealRecords, toggleTrack, user]);
 
   return (
     <div className="app-shell">
@@ -422,9 +702,9 @@ export function ScoutApp({
           <span className="pulse-dot" />
           <div>
             <strong>Demo realm</strong>
-            <small>3 sources reporting</small>
+            <small>{sources.length} configured sources</small>
           </div>
-          <span className="mono">94%</span>
+          <span className="mono">isolated</span>
         </div>
       </aside>
 
@@ -468,14 +748,22 @@ export function ScoutApp({
             <span className="eyebrow">{pageMeta[section].subtitle}</span>
             <h1>{pageMeta[section].title}</h1>
           </div>
-          <label className="market-search">
+          <form
+            className="market-search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              window.location.href = `/deals?q=${encodeURIComponent(globalQuery)}`;
+            }}
+          >
             <Search aria-hidden="true" />
             <input
               aria-label="Search cards, products, sets or listings"
               placeholder="Search the market…"
+              value={globalQuery}
+              onChange={(event) => setGlobalQuery(event.target.value)}
             />
             <kbd>⌘ K</kbd>
-          </label>
+          </form>
           <div className="top-actions">
             <Badge className="demo-badge">
               <Sparkles /> Demo Mode
@@ -487,6 +775,8 @@ export function ScoutApp({
                     aria-label="View alerts"
                     variant="outline"
                     size="icon"
+                    nativeButton={false}
+                    render={<Link href="/alerts" />}
                   />
                 }
               >
@@ -500,8 +790,6 @@ export function ScoutApp({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="EUR">EUR €</SelectItem>
-                <SelectItem value="GBP">GBP £</SelectItem>
-                <SelectItem value="USD">USD $</SelectItem>
               </SelectContent>
             </Select>
             <Account
@@ -523,37 +811,67 @@ export function ScoutApp({
         <main className="main-content">
           {section === 'dashboard' && (
             <Dashboard
+              deals={dealRecords}
               onInspect={setSelectedDeal}
+              onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
+              pendingTrackIds={pendingTrackIds}
+              recheckingIds={recheckingIds}
               trackedIds={trackedIds}
             />
           )}
           {section === 'deals' && (
             <DealsPage
+              deals={dealRecords}
               onInspect={setSelectedDeal}
+              onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
+              pendingTrackIds={pendingTrackIds}
+              recheckingIds={recheckingIds}
               trackedIds={trackedIds}
             />
           )}
           {section === 'lot-lab' && <LotLab onNotice={setNotice} />}
           {section === 'market' && (
-            <MarketPage onTrack={toggleTrack} trackedIds={trackedIds} />
-          )}
-          {section === 'releases' && <ReleasesPage onNotice={setNotice} />}
-          {section === 'scanner' && <ScannerPage onNotice={setNotice} />}
-          {section === 'portfolio' && <PortfolioPage onNotice={setNotice} />}
-          {section === 'watchlist' && (
-            <WatchlistPage
-              onInspect={setSelectedDeal}
+            <MarketPage
+              deals={dealRecords}
               onTrack={toggleTrack}
               trackedIds={trackedIds}
             />
           )}
-          {section === 'shadow' && <ShadowPage />}
-          {section === 'alerts' && <AlertsPage onNotice={setNotice} />}
+          {section === 'releases' && <ReleasesPage onNotice={setNotice} />}
+          {section === 'scanner' && (
+            <ScannerPage deals={dealRecords} onNotice={setNotice} />
+          )}
+          {section === 'portfolio' && <PortfolioPage onNotice={setNotice} />}
+          {section === 'watchlist' && (
+            <WatchlistPage
+              deals={dealRecords}
+              onInspect={setSelectedDeal}
+              onOpenListing={(deal) => void recheckDeal(deal, true)}
+              onTrack={toggleTrack}
+              recheckingIds={recheckingIds}
+              trackedIds={trackedIds}
+            />
+          )}
+          {section === 'shadow' && <ShadowPage trades={shadowRows} />}
+          {section === 'alerts' && (
+            <AlertsPage
+              deal={dealRecords[0] ?? null}
+              onInspect={setSelectedDeal}
+              onNotice={setNotice}
+              onOpenListing={(deal) => void recheckDeal(deal, true)}
+              recheckingIds={recheckingIds}
+              userSignedIn={Boolean(user)}
+            />
+          )}
           {section === 'sources' && <SourcesPage onNotice={setNotice} />}
-          {section === 'review' && <ReviewPage onNotice={setNotice} />}
-          {section === 'settings' && <SettingsPage onNotice={setNotice} />}
+          {section === 'review' && (
+            <ReviewPage onNotice={setNotice} userSignedIn={Boolean(user)} />
+          )}
+          {section === 'settings' && (
+            <SettingsPage onNotice={setNotice} userSignedIn={Boolean(user)} />
+          )}
         </main>
       </div>
 
@@ -561,8 +879,12 @@ export function ScoutApp({
       <DealDetailDialog
         deal={selectedDeal}
         onOpenChange={(open) => !open && setSelectedDeal(null)}
-        onNotice={setNotice}
+        onOpenListing={(deal) => void recheckDeal(deal, true)}
+        onRecheck={(deal) => void recheckDeal(deal)}
+        onShadow={(deal) => void shadowBuy(deal)}
         onTrack={toggleTrack}
+        rechecking={selectedDeal ? recheckingIds.has(selectedDeal.id) : false}
+        tracking={selectedDeal ? pendingTrackIds.has(selectedDeal.id) : false}
         tracked={selectedDeal ? trackedIds.has(selectedDeal.id) : false}
       />
     </div>
@@ -676,14 +998,14 @@ function Panel({
   children,
   className,
   parchment = false,
-}: {
-  children: React.ReactNode;
-  className?: string;
+  ...props
+}: React.ComponentProps<'section'> & {
   parchment?: boolean;
 }) {
   return (
     <section
       className={cn('arcane-panel', parchment && 'parchment-panel', className)}
+      {...props}
     >
       {children}
     </section>
@@ -773,21 +1095,29 @@ function Delta({ value }: { value: number }) {
 }
 
 function Dashboard({
+  deals: records,
   onInspect,
+  onOpenListing,
   onTrack,
+  pendingTrackIds,
+  recheckingIds,
   trackedIds,
 }: {
+  deals: Deal[];
   onInspect: (deal: Deal) => void;
-  onTrack: (id: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  pendingTrackIds: Set<string>;
+  recheckingIds: Set<string>;
   trackedIds: Set<string>;
 }) {
-  const qualified = deals.filter(qualifiesForQuickFlip);
+  const qualified = records.filter(qualifiesForQuickFlip);
   return (
     <div className="page-stack">
       <Panel className="command-panel">
         <div className="command-copy">
           <div className="panel-kicker">
-            <Compass /> Live field ledger · Europe/Amsterdam
+            <Compass /> Evidence-aware ledger · Europe/Amsterdam
           </div>
           <h2>The Scout’s Table</h2>
           <p>
@@ -824,13 +1154,14 @@ function Dashboard({
         </div>
         <div className="command-statuses">
           <span>
-            <i className="status-live" /> eBay fixture refreshed 4m
+            <i className="status-warn" /> eBay live credentials required
           </span>
           <span>
-            <i className="status-live" /> Cardmarket guide current
+            <i className="status-warn" /> Cardmarket official URLs required
           </span>
           <span>
-            <i className="status-warn" /> 1 parser needs review
+            <i className="status-warn" /> {fixtureReviewItems.length} fixture
+            records need review
           </span>
         </div>
       </Panel>
@@ -838,9 +1169,9 @@ function Dashboard({
       <div className="metric-grid">
         <MetricPlaque
           icon={Sparkles}
-          label="New opportunities"
-          value="17"
-          detail="5 since last scan"
+          label="Visible opportunities"
+          value={String(records.length)}
+          detail={`${records.filter((item) => item.dataMode === 'production').length} live · ${records.filter((item) => item.dataMode === 'demo').length} demo`}
           tone="gold"
         />
         <MetricPlaque
@@ -853,28 +1184,33 @@ function Dashboard({
         <MetricPlaque
           icon={Bell}
           label="Below target"
-          value="4"
-          detail="1 critical"
+          value={String(
+            records.filter((item) => allInCostWithinMaximum(item.economics))
+              .length,
+          )}
+          detail={`${qualified.length} pass every gate`}
           tone="violet"
         />
         <MetricPlaque
           icon={CalendarDays}
           label="Releases nearing"
-          value="3"
-          detail="next in 7 days"
+          value={String(releases.length)}
+          detail={`next in ${Math.min(...releases.map((item) => item.daysAway))} days`}
           tone="blue"
         />
         <MetricPlaque
           icon={HeartPulse}
-          label="Scan health"
-          value="94%"
-          detail="18,612 records today"
+          label="Live source records"
+          value={String(
+            records.filter((item) => item.dataMode === 'production').length,
+          )}
+          detail="credentials required for eBay"
           tone="green"
         />
         <MetricPlaque
           icon={ShieldAlert}
           label="Needs review"
-          value="4"
+          value={String(fixtureReviewItems.length)}
           detail="no critical alerts emitted"
           tone="amber"
         />
@@ -892,12 +1228,16 @@ function Dashboard({
             }
           />
           <div className="deal-grid">
-            {deals.slice(0, 3).map((item) => (
+            {records.slice(0, 3).map((item) => (
               <DealCard
                 deal={item}
                 key={item.id}
                 onInspect={onInspect}
+                onOpenListing={onOpenListing}
                 onTrack={onTrack}
+                rechecking={recheckingIds.has(item.id)}
+                surface="dashboard"
+                tracking={pendingTrackIds.has(item.id)}
                 tracked={trackedIds.has(item.id)}
               />
             ))}
@@ -908,7 +1248,7 @@ function Dashboard({
           <Panel className="pulse-panel">
             <SectionHeading
               title="Market Pulse"
-              subtitle="Seven-day movement"
+              subtitle="Fictional demo seven-day movement"
             />
             <PulseRow
               name="Prismatic ETBs"
@@ -932,8 +1272,8 @@ function Dashboard({
             <div className="pulse-note">
               <AlertTriangle />{' '}
               <span>
-                <strong>Unusual activity</strong> Six retailers reduced Origins
-                displays today.
+                <strong>Fixture signal</strong> The demo cohort models six
+                retailer reductions.
               </span>
             </div>
           </Panel>
@@ -941,22 +1281,36 @@ function Dashboard({
           <Panel className="watch-snapshot">
             <SectionHeading title="Watchtower" subtitle="Recent triggers" />
             <WatchEvent
+              deal={records[0] ?? null}
               tone="critical"
               title="Target crossed"
-              detail="Prismatic ETB pair · €126.45 all-in"
               time="11m"
+              onOpenListing={onOpenListing}
+              rechecking={Boolean(
+                records[0] && recheckingIds.has(records[0].id),
+              )}
             />
             <WatchEvent
+              deal={records[1] ?? null}
               tone="positive"
               title="New sold evidence"
               detail="Destined Rivals · median +2.1%"
               time="47m"
+              onOpenListing={onOpenListing}
+              rechecking={Boolean(
+                records[1] && recheckingIds.has(records[1].id),
+              )}
             />
             <WatchEvent
+              deal={records[2] ?? null}
               tone="warning"
               title="Price changed"
               detail="Origins display · exit now negative"
               time="2h"
+              onOpenListing={onOpenListing}
+              rechecking={Boolean(
+                records[2] && recheckingIds.has(records[2].id),
+              )}
             />
             <Link className="text-link block-link" href="/watchlist">
               Open Watchtower <ArrowRight />
@@ -1037,17 +1391,28 @@ function MetricPlaque({
 function DealCard({
   deal: item,
   onInspect,
+  onOpenListing,
   onTrack,
+  rechecking,
+  surface,
+  tracking,
   tracked,
 }: {
   deal: Deal;
   onInspect: (deal: Deal) => void;
-  onTrack: (id: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  rechecking: boolean;
+  surface: 'dashboard' | 'deals';
+  tracking: boolean;
   tracked: boolean;
 }) {
+  const copy = economicsCopy(item.economics);
   return (
     <article
       className={cn('deal-card', item.status === 'Likely Trap' && 'trap-card')}
+      data-economics-surface={surface}
+      data-deal-id={item.id}
     >
       <div className="deal-visual">
         <ProductGlyph deal={item} />
@@ -1067,6 +1432,11 @@ function DealCard({
           <i /> <span>{item.set}</span>
           <i /> <span>{item.listingAge} ago</span>
         </div>
+        <Badge variant="outline">
+          {item.dataMode === 'demo'
+            ? 'DEMO · fictional listing'
+            : 'LIVE SOURCE'}
+        </Badge>
         <h3>{item.canonicalProduct}</h3>
         <p className="listing-title">“{item.title}”</p>
         <div className="source-line">
@@ -1079,24 +1449,18 @@ function DealCard({
           </span>
         </div>
         <div className="economics-strip">
-          <EconomicMetric
-            label="All-in"
-            value={money(item.economics.allInCost)}
-          />
-          <EconomicMetric
-            label="Net exit"
-            value={money(item.economics.conservativeNetExit)}
-          />
+          <EconomicMetric label="All-in" value={copy.allInCost} />
+          <EconomicMetric label="Net exit" value={copy.conservativeNetExit} />
           <EconomicMetric
             label="Profit"
-            value={money(item.economics.conservativeProfit)}
+            value={copy.conservativeProfit}
             tone={
               item.economics.conservativeProfit >= 0 ? 'positive' : 'negative'
             }
           />
           <EconomicMetric
             label="ROI"
-            value={percent(item.economics.roi)}
+            value={copy.roi}
             tone={
               item.economics.roi >= 0.2
                 ? 'positive'
@@ -1131,12 +1495,33 @@ function DealCard({
           <Button
             className={cn('iron-button', tracked && 'tracked')}
             variant="outline"
-            onClick={() => onTrack(item.id)}
+            disabled={tracking}
+            onClick={() => void onTrack(item.id)}
           >
-            {tracked ? <Check /> : <Eye />}
-            {tracked ? 'Tracked' : 'Track'}
+            {tracking ? (
+              <RefreshCw className="spin" />
+            ) : tracked ? (
+              <Check />
+            ) : (
+              <Eye />
+            )}
+            {tracking ? 'Saving…' : tracked ? 'Tracked' : 'Track'}
+          </Button>
+          <Button
+            className="iron-button"
+            variant="outline"
+            disabled={rechecking || item.availabilityStatus === 'unavailable'}
+            onClick={() => onOpenListing(item)}
+          >
+            {rechecking ? <RefreshCw className="spin" /> : <ExternalLink />}
+            {rechecking
+              ? 'Rechecking…'
+              : item.availabilityStatus === 'unavailable'
+                ? 'Unavailable'
+                : 'Open listing'}
           </Button>
         </div>
+        <small className="verification-line">{verificationLabel(item)}</small>
       </div>
     </article>
   );
@@ -1190,24 +1575,48 @@ function PulseRow({
 }
 
 function WatchEvent({
+  deal,
   tone,
   title,
   detail,
   time,
+  onOpenListing,
+  rechecking = false,
 }: {
+  deal?: Deal | null;
   tone: string;
   title: string;
-  detail: string;
+  detail?: string;
   time: string;
+  onOpenListing?: (deal: Deal) => void;
+  rechecking?: boolean;
 }) {
+  const derivedDetail = deal
+    ? `${deal.canonicalProduct} · ${economicsCopy(deal.economics).allInCost} all-in · ${economicsCopy(deal.economics).conservativeProfit} profit · ${economicsCopy(deal.economics).roi} ROI`
+    : detail;
   return (
-    <div className="watch-event">
+    <div
+      className="watch-event"
+      data-economics-surface={deal ? 'watchtower' : undefined}
+      data-deal-id={deal?.id}
+    >
       <span className={cn('event-gem', tone)} />
       <div>
         <strong>{title}</strong>
-        <small>{detail}</small>
+        <small>{derivedDetail}</small>
       </div>
       <time>{time}</time>
+      {deal && onOpenListing ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={rechecking || deal.availabilityStatus === 'unavailable'}
+          onClick={() => onOpenListing(deal)}
+        >
+          {rechecking ? <RefreshCw className="spin" /> : <ExternalLink />}
+          {rechecking ? 'Rechecking…' : 'Open listing'}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -1241,12 +1650,20 @@ function ReleaseTile({ release }: { release: (typeof releases)[number] }) {
 }
 
 function DealsPage({
+  deals: records,
   onInspect,
+  onOpenListing,
   onTrack,
+  pendingTrackIds,
+  recheckingIds,
   trackedIds,
 }: {
+  deals: Deal[];
   onInspect: (deal: Deal) => void;
-  onTrack: (id: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  pendingTrackIds: Set<string>;
+  recheckingIds: Set<string>;
   trackedIds: Set<string>;
 }) {
   const [game, setGame] = useState('all');
@@ -1255,16 +1672,36 @@ function DealsPage({
   const [sort, setSort] = useState('score');
   const [view, setView] = useState<'cards' | 'table'>('cards');
   const [query, setQuery] = useState('');
+  const [minimumRoi, setMinimumRoi] = useState(0);
+  const [minimumGrade, setMinimumGrade] = useState('C');
+  const [maximumRisk, setMaximumRisk] = useState(100);
+  const [maximumAgeHours, setMaximumAgeHours] = useState(168);
+  const [exitMarket, setExitMarket] = useState('any');
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search).get('q');
+    if (search) queueMicrotask(() => setQuery(search));
+  }, []);
   const filtered = useMemo(() => {
-    const list = deals.filter(
-      (item) =>
+    const gradeRank = { A: 3, B: 2, C: 1, D: 0 } as const;
+    const list = records.filter((item) => {
+      const requiredRank = gradeRank[minimumGrade as keyof typeof gradeRank];
+      const exitMatches =
+        exitMarket === 'any' ||
+        item.exitChannel.toLowerCase().includes(exitMarket);
+      return (
         (game === 'all' || item.game === game) &&
         (source === 'all' || item.source === source) &&
         item.economics.conservativeProfit >= Number(minimumProfit || 0) &&
+        item.economics.roi >= minimumRoi &&
+        gradeRank[item.confidenceGrade] >= requiredRank &&
+        item.riskScore <= maximumRisk &&
+        item.detectedMinutesAgo <= maximumAgeHours * 60 &&
+        exitMatches &&
         `${item.title} ${item.canonicalProduct} ${item.set}`
           .toLowerCase()
-          .includes(query.toLowerCase()),
-    );
+          .includes(query.toLowerCase())
+      );
+    });
     return [...list].sort((a, b) =>
       sort === 'profit'
         ? b.economics.conservativeProfit - a.economics.conservativeProfit
@@ -1272,7 +1709,19 @@ function DealsPage({
           ? a.riskScore - b.riskScore
           : b.instantScore - a.instantScore,
     );
-  }, [game, source, minimumProfit, sort, query]);
+  }, [
+    exitMarket,
+    game,
+    maximumAgeHours,
+    maximumRisk,
+    minimumGrade,
+    minimumProfit,
+    minimumRoi,
+    query,
+    records,
+    sort,
+    source,
+  ]);
 
   return (
     <div className="page-stack">
@@ -1288,9 +1737,12 @@ function DealsPage({
           </p>
         </div>
         <div className="gate-summary">
-          <strong>{deals.filter(qualifiesForQuickFlip).length}</strong>
+          <strong>{records.filter(qualifiesForQuickFlip).length}</strong>
           <span>pass the quick-flip gate</span>
-          <small>≥ €25 profit · ≥ 20% ROI · A/B evidence</small>
+          <small>
+            ≥ {money(QUICK_FLIP_GATE.minimumProfit)} profit · ≥{' '}
+            {percent(QUICK_FLIP_GATE.minimumRoi)} ROI · A/B evidence
+          </small>
         </div>
       </Panel>
 
@@ -1368,7 +1820,18 @@ function DealsPage({
                 Filter by economics, evidence and execution risk.
               </SheetDescription>
             </SheetHeader>
-            <FilterSheet />
+            <FilterSheet
+              exitMarket={exitMarket}
+              maximumAgeHours={maximumAgeHours}
+              maximumRisk={maximumRisk}
+              minimumGrade={minimumGrade}
+              minimumRoi={minimumRoi}
+              onExitMarketChange={setExitMarket}
+              onMaximumAgeHoursChange={setMaximumAgeHours}
+              onMaximumRiskChange={setMaximumRisk}
+              onMinimumGradeChange={setMinimumGrade}
+              onMinimumRoiChange={setMinimumRoi}
+            />
           </SheetContent>
         </Sheet>
         <div className="view-toggle">
@@ -1393,7 +1856,9 @@ function DealsPage({
 
       <div className="results-line">
         <span>
-          Showing {filtered.length} of {deals.length} demo listings
+          Showing {filtered.length} of {records.length} listings ·{' '}
+          {records.filter((item) => item.dataMode === 'production').length} live
+          · {records.filter((item) => item.dataMode === 'demo').length} demo
         </span>
         <span>
           <Clock3 /> Last ranked 38 seconds ago
@@ -1423,7 +1888,11 @@ function DealsPage({
               deal={item}
               key={item.id}
               onInspect={onInspect}
+              onOpenListing={onOpenListing}
               onTrack={onTrack}
+              rechecking={recheckingIds.has(item.id)}
+              surface="deals"
+              tracking={pendingTrackIds.has(item.id)}
               tracked={trackedIds.has(item.id)}
             />
           ))}
@@ -1437,16 +1906,48 @@ function DealsPage({
   );
 }
 
-function FilterSheet() {
+function FilterSheet({
+  exitMarket,
+  maximumAgeHours,
+  maximumRisk,
+  minimumGrade,
+  minimumRoi,
+  onExitMarketChange,
+  onMaximumAgeHoursChange,
+  onMaximumRiskChange,
+  onMinimumGradeChange,
+  onMinimumRoiChange,
+}: {
+  exitMarket: string;
+  maximumAgeHours: number;
+  maximumRisk: number;
+  minimumGrade: string;
+  minimumRoi: number;
+  onExitMarketChange: (value: string) => void;
+  onMaximumAgeHoursChange: (value: number) => void;
+  onMaximumRiskChange: (value: number) => void;
+  onMinimumGradeChange: (value: string) => void;
+  onMinimumRoiChange: (value: number) => void;
+}) {
   return (
     <div className="sheet-form">
       <label>
         <span>Minimum ROI</span>
-        <Input defaultValue="20%" />
+        <Input
+          aria-label="Minimum ROI percent"
+          type="number"
+          value={Math.round(minimumRoi * 100)}
+          onChange={(event) =>
+            onMinimumRoiChange(Number(event.target.value) / 100)
+          }
+        />
       </label>
       <label>
         <span>Minimum confidence</span>
-        <Select defaultValue="B">
+        <Select
+          value={minimumGrade}
+          onValueChange={(value) => onMinimumGradeChange(value ?? 'C')}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -1459,11 +1960,20 @@ function FilterSheet() {
       </label>
       <label>
         <span>Maximum risk score</span>
-        <Input type="number" defaultValue="45" />
+        <Input
+          type="number"
+          value={maximumRisk}
+          onChange={(event) => onMaximumRiskChange(Number(event.target.value))}
+        />
       </label>
       <label>
         <span>Listing age</span>
-        <Select defaultValue="24">
+        <Select
+          value={String(maximumAgeHours)}
+          onValueChange={(value) =>
+            onMaximumAgeHoursChange(Number(value ?? 168))
+          }
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -1476,7 +1986,10 @@ function FilterSheet() {
       </label>
       <label>
         <span>Exit market</span>
-        <Select defaultValue="any">
+        <Select
+          value={exitMarket}
+          onValueChange={(value) => onExitMarketChange(value ?? 'any')}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -1488,9 +2001,9 @@ function FilterSheet() {
           </SelectContent>
         </Select>
       </label>
-      <Button className="gold-button">
-        <ListFilter /> Apply filters
-      </Button>
+      <p className="safety-note">
+        <ListFilter /> Filters apply immediately to the Bounty Board.
+      </p>
     </div>
   );
 }
@@ -1578,20 +2091,32 @@ function DealTable({
 function DealDetailDialog({
   deal: item,
   onOpenChange,
-  onNotice,
+  onOpenListing,
+  onRecheck,
+  onShadow,
   onTrack,
+  rechecking,
+  tracking,
   tracked,
 }: {
   deal: Deal | null;
   onOpenChange: (open: boolean) => void;
-  onNotice: (text: string) => void;
-  onTrack: (id: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onRecheck: (deal: Deal) => void;
+  onShadow: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  rechecking: boolean;
+  tracking: boolean;
   tracked: boolean;
 }) {
   if (!item) return null;
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="deal-dialog">
+      <DialogContent
+        className="deal-dialog"
+        data-economics-surface="deal-detail"
+        data-deal-id={item.id}
+      >
         <DialogHeader className="deal-dialog-header">
           <div className="detail-product">
             <ProductGlyph deal={item} />
@@ -1639,34 +2164,47 @@ function DealDetailDialog({
           <div className="detail-exit">
             <span>Preferred exit</span>
             <strong>{item.exitChannel}</strong>
-            <small>Last verified {item.listingAge} ago</small>
+            <small>{verificationLabel(item)}</small>
           </div>
           <Button
             variant="outline"
             className={cn('iron-button', tracked && 'tracked')}
-            onClick={() => onTrack(item.id)}
+            disabled={tracking}
+            onClick={() => void onTrack(item.id)}
           >
-            {tracked ? <Check /> : <Eye />}
-            {tracked ? 'Tracked' : 'Track'}
+            {tracking ? (
+              <RefreshCw className="spin" />
+            ) : tracked ? (
+              <Check />
+            ) : (
+              <Eye />
+            )}
+            {tracking ? 'Saving…' : tracked ? 'Tracked' : 'Track'}
           </Button>
           <Button
             variant="outline"
             className="iron-button"
-            onClick={() =>
-              onNotice(`${item.canonicalProduct} added to Shadow Mode.`)
-            }
+            onClick={() => onShadow(item)}
           >
             <Eye /> Shadow buy
           </Button>
           <Button
             className="gold-button"
-            onClick={() =>
-              onNotice(
-                'Listing recheck queued. Purchase remains human-approved and stops before checkout.',
-              )
-            }
+            disabled={rechecking}
+            onClick={() => onRecheck(item)}
           >
-            <RefreshCw /> Recheck listing
+            <RefreshCw className={cn(rechecking && 'spin')} />
+            {rechecking ? 'Rechecking…' : 'Recheck listing'}
+          </Button>
+          <Button
+            className="gold-button"
+            disabled={rechecking || item.availabilityStatus === 'unavailable'}
+            onClick={() => onOpenListing(item)}
+          >
+            <ExternalLink />
+            {item.availabilityStatus === 'unavailable'
+              ? 'Unavailable'
+              : 'Open listing'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1676,6 +2214,7 @@ function DealDetailDialog({
 
 function EconomicsDetail({ deal: item }: { deal: Deal }) {
   const e = item.economics;
+  const copy = economicsCopy(e);
   return (
     <div className="detail-grid">
       <Panel className="ledger-panel" parchment>
@@ -1716,16 +2255,25 @@ function EconomicsDetail({ deal: item }: { deal: Deal }) {
       <div className="detail-metrics">
         <EconomicMetric
           label="Conservative profit"
-          value={money(e.conservativeProfit)}
+          value={copy.conservativeProfit}
           tone={e.conservativeProfit >= 0 ? 'positive' : 'negative'}
         />
-        <EconomicMetric label="ROI" value={percent(e.roi)} />
-        <EconomicMetric label="Profit / hour" value={money(e.profitPerHour)} />
+        <EconomicMetric label="ROI" value={copy.roi} />
+        <EconomicMetric label="Profit / hour" value={copy.profitPerHour} />
         <EconomicMetric
           label="Maximum item price"
-          value={money(e.maximumItemPrice)}
+          value={copy.maximumItemPrice}
+        />
+        <EconomicMetric
+          label="Maximum all-in cost"
+          value={copy.maximumAllInCost}
         />
       </div>
+      <p className="safety-note">
+        Item price {copy.itemPrice} is compared with maximum item price{' '}
+        {copy.maximumItemPrice}. All-in cost {copy.allInCost} is compared with
+        maximum all-in cost {copy.maximumAllInCost}.
+      </p>
       <div
         className={cn(
           'decision-banner',
@@ -1772,14 +2320,14 @@ function LedgerRow({
 function EvidenceDetail({ deal: item }: { deal: Deal }) {
   const comps = [
     {
-      type: 'Verified sold',
+      type: 'Fictional demonstration transaction',
       source: 'Cardmarket',
       price: item.economics.expectedSalePrice - 4,
       age: '2h',
       weight: 'High',
     },
     {
-      type: 'Verified sold',
+      type: 'Fictional demonstration transaction',
       source: 'eBay',
       price: item.economics.expectedSalePrice + 7,
       age: '1d',
@@ -1806,7 +2354,10 @@ function EvidenceDetail({ deal: item }: { deal: Deal }) {
         <Scale />
         <div>
           <strong>{item.priceEvidence}</strong>
-          <span>Active asks are separated from transaction evidence.</span>
+          <span>
+            Active asks are separated from completed-sale evidence. Demo
+            transactions are never presented as verified market sales.
+          </span>
         </div>
       </div>
       <Table>
@@ -1926,7 +2477,8 @@ function RiskDetail({ deal: item }: { deal: Deal }) {
 function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
   const [laborHours, setLaborHours] = useState(6.5);
   const [requiredProfit, setRequiredProfit] = useState(100);
-  const [uploaded, setUploaded] = useState(false);
+  const [selectedFileCount, setSelectedFileCount] = useState(0);
+  const uploaded = selectedFileCount > 0;
   const collectionNet = 292 - laborHours * 18 - 35 - 14 - 22;
   const maximumOffer = Math.max(0, collectionNet - requiredProfit);
   return (
@@ -1944,7 +2496,7 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               multiple
               onChange={(event) => {
                 if (event.target.files?.length) {
-                  setUploaded(true);
+                  setSelectedFileCount(event.target.files.length);
                   onNotice(
                     `${event.target.files.length} image${event.target.files.length > 1 ? 's' : ''} queued for local demo analysis.`,
                   );
@@ -1954,7 +2506,10 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
             {uploaded ? (
               <>
                 <Check />
-                <strong>6 binder photos ready</strong>
+                <strong>
+                  {selectedFileCount} binder photo
+                  {selectedFileCount === 1 ? '' : 's'} selected
+                </strong>
                 <span>Run candidate extraction or add more angles</span>
               </>
             ) : (
@@ -1971,7 +2526,7 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
             <Button
               className="gold-button"
               onClick={() => {
-                setUploaded(true);
+                setSelectedFileCount(6);
                 onNotice(
                   'Demo lot loaded. 31 candidates identified; 53 uncertain items moved to review.',
                 );
@@ -1979,7 +2534,15 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
             >
               <WandSparkles /> Load demo binder
             </Button>
-            <Button variant="outline" className="iron-button">
+            <Button
+              variant="outline"
+              className="iron-button"
+              onClick={() =>
+                onNotice(
+                  'Inspection checklist: seals, corners, quantity, language, condition and authenticity.',
+                )
+              }
+            >
               <FileSearch /> Inspection checklist
             </Button>
           </div>
@@ -2027,7 +2590,13 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
             title="Candidate review"
             subtitle="31 identified · 53 uncertain · 3 priority checks"
             action={
-              <Button variant="outline" className="iron-button">
+              <Button
+                variant="outline"
+                className="iron-button"
+                onClick={() => {
+                  window.location.href = '/review';
+                }}
+              >
                 Resolve uncertainty
               </Button>
             }
@@ -2039,6 +2608,9 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               value="€142–€186"
               confidence={72}
               tone="amber"
+              onEdit={() =>
+                onNotice('Candidate editor opened for Charizard 4/102.')
+              }
             />
             <CandidateCard
               name="Blastoise 2/102 holo"
@@ -2046,6 +2618,9 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               value="€64–€98"
               confidence={81}
               tone="blue"
+              onEdit={() =>
+                onNotice('Candidate editor opened for Blastoise 2/102.')
+              }
             />
             <CandidateCard
               name="Mixed modern holos × 29"
@@ -2053,6 +2628,9 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               value="€18–€31"
               confidence={93}
               tone="emerald"
+              onEdit={() =>
+                onNotice('Candidate editor opened for modern holo lot.')
+              }
             />
           </div>
         </Panel>
@@ -2119,12 +2697,14 @@ function CandidateCard({
   value,
   confidence,
   tone,
+  onEdit,
 }: {
   name: string;
   detail: string;
   value: string;
   confidence: number;
   tone: string;
+  onEdit: () => void;
 }) {
   return (
     <article className="candidate-card">
@@ -2141,7 +2721,7 @@ function CandidateCard({
           <span>{confidence}%</span>
         </div>
       </div>
-      <Button variant="outline" size="sm">
+      <Button variant="outline" size="sm" onClick={onEdit}>
         Edit
       </Button>
     </article>
@@ -2149,17 +2729,37 @@ function CandidateCard({
 }
 
 function MarketPage({
+  deals: records,
   onTrack,
   trackedIds,
 }: {
-  onTrack: (id: string) => void;
+  deals: Deal[];
+  onTrack: (id: string) => Promise<void>;
   trackedIds: Set<string>;
 }) {
-  const [selected, setSelected] = useState(deals[0]);
+  const [selected, setSelected] = useState(records[0]);
+  const [marketQuery, setMarketQuery] = useState('Prismatic Evolutions ETB');
+  const [marketResults, setMarketResults] = useState(records.slice(0, 4));
+  useEffect(() => {
+    queueMicrotask(() => {
+      setMarketResults(records.slice(0, 4));
+      setSelected(
+        (current) =>
+          records.find((item) => item.id === current?.id) ?? records[0],
+      );
+    });
+  }, [records]);
   const history = [128, 132, 129, 137, 142, 151, 154, 162, 169, 171, 178, 182];
   const points = history
     .map((value, index) => `${index * 38},${135 - (value - 120) * 1.65}`)
     .join(' ');
+  if (!selected)
+    return (
+      <Panel className="empty-state">
+        <Search />
+        <h2>No market records available</h2>
+      </Panel>
+    );
   return (
     <div className="page-stack">
       <Panel className="market-command">
@@ -2167,10 +2767,24 @@ function MarketPage({
           <Search />
           <Input
             placeholder="Search product, set, EAN or marketplace ID"
-            defaultValue="Prismatic Evolutions ETB"
+            value={marketQuery}
+            onChange={(event) => setMarketQuery(event.target.value)}
           />
         </label>
-        <Button className="gold-button">Search market</Button>
+        <Button
+          className="gold-button"
+          onClick={() => {
+            const next = records.filter((item) =>
+              `${item.canonicalProduct} ${item.set} ${item.sourceListingId}`
+                .toLowerCase()
+                .includes(marketQuery.toLowerCase()),
+            );
+            setMarketResults(next);
+            setSelected(next[0] ?? records[0]);
+          }}
+        >
+          Search market
+        </Button>
       </Panel>
       <div className="market-layout">
         <Panel className="market-results">
@@ -2178,7 +2792,7 @@ function MarketPage({
             title="Canonical products"
             subtitle="Identity before price comparison"
           />
-          {deals.slice(0, 4).map((item) => (
+          {marketResults.map((item) => (
             <button
               className={cn(
                 'market-result',
@@ -2266,7 +2880,7 @@ function MarketPage({
                 <Button
                   className="iron-button"
                   variant="outline"
-                  onClick={() => onTrack(selected.id)}
+                  onClick={() => void onTrack(selected.id)}
                 >
                   {trackedIds.has(selected.id) ? <Check /> : <Eye />}
                   {trackedIds.has(selected.id) ? 'Tracked' : 'Watch product'}
@@ -2287,7 +2901,7 @@ function MarketPage({
               <TableBody>
                 <ComparisonRow
                   source="Cardmarket"
-                  type="Verified sold cohort"
+                  type="Fictional demonstration transaction cohort"
                   item={selected.economics.expectedSalePrice - 3}
                   delivered={selected.economics.expectedSalePrice - 3}
                   age="2h"
@@ -2350,17 +2964,40 @@ function ComparisonRow({
 }
 
 function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
+  const [view, setView] = useState('timeline');
+  const [gameFilter, setGameFilter] = useState('all');
+  const [scopeFilter, setScopeFilter] = useState('eu');
+  const [watchedReleaseIds, setWatchedReleaseIds] = useState(
+    () =>
+      new Set(
+        releases
+          .filter((release) => release.watched)
+          .map((release) => release.id),
+      ),
+  );
+  const filteredReleases = releases.filter(
+    (release) =>
+      (gameFilter === 'all' || release.game.toLowerCase() === gameFilter) &&
+      (scopeFilter !== 'official' || release.official) &&
+      (scopeFilter !== 'watched' || watchedReleaseIds.has(release.id)),
+  );
   return (
     <div className="page-stack">
       <Panel className="filter-bar release-filters">
-        <Tabs defaultValue="timeline">
+        <Tabs
+          value={view}
+          onValueChange={(value) => setView(value ?? 'timeline')}
+        >
           <TabsList>
             <TabsTrigger value="timeline">Timeline</TabsTrigger>
             <TabsTrigger value="calendar">Calendar</TabsTrigger>
             <TabsTrigger value="table">Compact table</TabsTrigger>
           </TabsList>
         </Tabs>
-        <Select defaultValue="all">
+        <Select
+          value={gameFilter}
+          onValueChange={(value) => setGameFilter(value ?? 'all')}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -2370,7 +3007,10 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
             <SelectItem value="riftbound">Riftbound</SelectItem>
           </SelectContent>
         </Select>
-        <Select defaultValue="eu">
+        <Select
+          value={scopeFilter}
+          onValueChange={(value) => setScopeFilter(value ?? 'eu')}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -2381,60 +3021,117 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
           </SelectContent>
         </Select>
       </Panel>
-      <div className="release-timeline">
-        {releases.map((release, index) => (
-          <div className="timeline-entry" key={release.id}>
-            <div className="timeline-marker">
-              <span>{release.daysAway}</span>
-            </div>
-            <Panel className="timeline-card">
-              <div className="timeline-main">
-                <span className="eyebrow">
-                  {release.releaseDate} · {release.game}
-                </span>
-                <h2>{release.name}</h2>
-                <p>
-                  {release.product} · {release.status}
-                </p>
-                <div className="release-meta">
-                  <span>MSRP {money(release.msrp)}</span>
-                  <span>Current {release.preorderRange}</span>
-                  <span>{release.retailerCount} retailers</span>
+      {view === 'timeline' ? (
+        <div className="release-timeline" data-release-view="timeline">
+          {filteredReleases.map((release, index) => (
+            <div className="timeline-entry" key={release.id}>
+              <div className="timeline-marker">
+                <span>{release.daysAway}</span>
+              </div>
+              <Panel className="timeline-card">
+                <div className="timeline-main">
+                  <span className="eyebrow">
+                    {release.releaseDate} · {release.game}
+                  </span>
+                  <h2>{release.name}</h2>
+                  <p>
+                    {release.product} · {release.status}
+                  </p>
+                  <div className="release-meta">
+                    <span>MSRP {money(release.msrp)}</span>
+                    <span>Current {release.preorderRange}</span>
+                    <span>{release.retailerCount} retailers</span>
+                  </div>
                 </div>
-              </div>
-              <div className="breadth-meter">
-                <span>Retail stock breadth</span>
-                <Progress value={Math.min(100, release.retailerCount * 8)} />
-                <small>{release.demand} interest</small>
-              </div>
-              <Badge
-                className={
-                  release.official ? 'official-badge' : 'unconfirmed-badge'
-                }
-              >
-                {release.official ? <Check /> : <AlertTriangle />}
-                {release.official
-                  ? 'Official source'
-                  : 'Unconfirmed community signal'}
-              </Badge>
-              <Button
-                className="iron-button"
-                variant="outline"
-                onClick={() => onNotice(`${release.name} is now watched.`)}
-              >
-                <Eye /> Watch release
-              </Button>
-            </Panel>
-            {index < releases.length - 1 && <span className="timeline-line" />}
+                <div className="breadth-meter">
+                  <span>Retail stock breadth</span>
+                  <Progress value={Math.min(100, release.retailerCount * 8)} />
+                  <small>{release.demand} interest</small>
+                </div>
+                <Badge
+                  className={
+                    release.official ? 'official-badge' : 'unconfirmed-badge'
+                  }
+                >
+                  {release.official ? <Check /> : <AlertTriangle />}
+                  {release.official
+                    ? 'Official source'
+                    : 'Unconfirmed community signal'}
+                </Badge>
+                <Button
+                  className="iron-button"
+                  variant="outline"
+                  onClick={() => {
+                    setWatchedReleaseIds((current) =>
+                      new Set(current).add(release.id),
+                    );
+                    onNotice(
+                      `${release.name} is now watched for this session.`,
+                    );
+                  }}
+                >
+                  <Eye /> Watch release
+                </Button>
+              </Panel>
+              {index < filteredReleases.length - 1 && (
+                <span className="timeline-line" />
+              )}
+            </div>
+          ))}
+        </div>
+      ) : view === 'calendar' ? (
+        <Panel className="release-strip" data-release-view="calendar">
+          <SectionHeading
+            title="Release calendar"
+            subtitle="Upcoming dates in chronological order"
+          />
+          <div className="release-grid">
+            {filteredReleases.map((release) => (
+              <ReleaseTile key={release.id} release={release} />
+            ))}
           </div>
-        ))}
-      </div>
+        </Panel>
+      ) : (
+        <Panel className="data-table-panel" data-release-view="table">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Game</TableHead>
+                <TableHead>Release</TableHead>
+                <TableHead>Product</TableHead>
+                <TableHead>Source status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredReleases.map((release) => (
+                <TableRow key={release.id}>
+                  <TableCell>{release.releaseDate}</TableCell>
+                  <TableCell>{release.game}</TableCell>
+                  <TableCell>{release.name}</TableCell>
+                  <TableCell>{release.product}</TableCell>
+                  <TableCell>
+                    {release.official ? 'Official' : 'Unconfirmed'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
+      )}
     </div>
   );
 }
 
-function ScannerPage({ onNotice }: { onNotice: (text: string) => void }) {
+function ScannerPage({
+  deals: records,
+  onNotice,
+}: {
+  deals: Deal[];
+  onNotice: (text: string) => void;
+}) {
   const [scanned, setScanned] = useState(false);
+  const demoDeal = records[0];
   return (
     <div className="scanner-layout">
       <Panel className="scanner-stage">
@@ -2448,25 +3145,21 @@ function ScannerPage({ onNotice }: { onNotice: (text: string) => void }) {
             <span />
             <Camera />
           </div>
-          <label>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={(event) => {
-                if (event.target.files?.[0]) {
-                  setScanned(true);
-                  onNotice(
-                    'Image analysed locally in Demo Mode. Confirm the product match before using prices.',
-                  );
-                }
-              }}
-            />
-            <Button className="gold-button" render={<span />}>
-              <Camera /> Use camera or upload
-            </Button>
-          </label>
-          <p>Front, back and identifying codes improve confidence.</p>
+          <Button
+            className="gold-button"
+            onClick={() => {
+              setScanned(true);
+              onNotice(
+                'Demo scan simulated. No file was read, retained or analysed.',
+              );
+            }}
+          >
+            <WandSparkles /> Simulate Demo Scan
+          </Button>
+          <p>
+            This simulation loads a predetermined fixture. No image recognition
+            occurs and no file is selected or retained.
+          </p>
         </div>
         <div className="scanner-privacy">
           <ShieldAlert />
@@ -2477,26 +3170,22 @@ function ScannerPage({ onNotice }: { onNotice: (text: string) => void }) {
         </div>
       </Panel>
       <Panel className="scan-result" parchment>
-        {scanned ? (
+        {scanned && demoDeal ? (
           <>
             <span className="eyebrow">Candidate match</span>
             <div className="scan-match">
-              <ProductGlyph deal={deals[0]} />
+              <ProductGlyph deal={demoDeal} />
               <div>
-                <h2>{deals[0].canonicalProduct}</h2>
-                <p>{deals[0].set} · English · sealed</p>
-                <div className="confidence-line">
-                  <span>Match confidence</span>
-                  <Progress value={94} />
-                  <span>94%</span>
-                </div>
+                <h2>{demoDeal.canonicalProduct}</h2>
+                <p>{demoDeal.set} · predetermined demonstration candidate</p>
+                <Badge variant="outline">SIMULATED · not image-derived</Badge>
               </div>
             </div>
             <div className="scan-evidence">
               <LedgerRow label="Suggested identity" value={0} />
               <p>
-                Visual packaging marks, set logo, product proportions and
-                visible seal pattern agree. Barcode is not visible.
+                No visual evidence was evaluated. Confirming a production match
+                requires a real recognition pipeline and human review.
               </p>
             </div>
             <div className="scan-actions">
@@ -2508,7 +3197,14 @@ function ScannerPage({ onNotice }: { onNotice: (text: string) => void }) {
               >
                 Compare market
               </Button>
-              <Button className="iron-button" variant="outline">
+              <Button
+                className="iron-button"
+                variant="outline"
+                onClick={() => {
+                  setScanned(false);
+                  onNotice('Simulated candidate cleared.');
+                }}
+              >
                 Correct match
               </Button>
             </div>
@@ -2529,6 +3225,42 @@ function ScannerPage({ onNotice }: { onNotice: (text: string) => void }) {
 }
 
 function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
+  const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [saleOpen, setSaleOpen] = useState(false);
+  const [inventoryLots, setInventoryLots] = useState<
+    {
+      id: string;
+      name: string;
+      remainingQuantity: number;
+      allInBasis: number;
+    }[]
+  >([]);
+  const [portfolioBusy, setPortfolioBusy] = useState(false);
+  const [purchaseQuantity, setPurchaseQuantity] = useState(1);
+  const [purchaseItemPrice, setPurchaseItemPrice] = useState(
+    deals[0]?.economics.itemPrice ?? 0,
+  );
+  const [purchaseCosts, setPurchaseCosts] = useState(
+    deals[0]?.economics.nonItemAcquisitionCosts ?? 0,
+  );
+  const [saleLotId, setSaleLotId] = useState('');
+  const [saleGross, setSaleGross] = useState(0);
+  const [saleCosts, setSaleCosts] = useState(0);
+  const loadInventory = async () => {
+    const response = await fetch('/api/purchases');
+    const payload = (await response.json()) as {
+      data?: typeof inventoryLots;
+      error?: string;
+    };
+    if (response.ok && payload.data) {
+      setInventoryLots(payload.data);
+      setSaleLotId((current) => current || payload.data?.[0]?.id || '');
+    }
+  };
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void loadInventory(), 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
   const holdings = [
     {
       name: 'Prismatic Evolutions ETB',
@@ -2623,17 +3355,14 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
                 <Button
                   variant="outline"
                   className="iron-button"
-                  onClick={() => onNotice('Purchase form opened in Demo Mode.')}
+                  onClick={() => setPurchaseOpen(true)}
                 >
                   Record purchase
                 </Button>
                 <Button
                   className="gold-button"
-                  onClick={() =>
-                    onNotice(
-                      'Sale form opened. Realised profit will only be recorded after completion.',
-                    )
-                  }
+                  disabled={!inventoryLots.length}
+                  onClick={() => setSaleOpen(true)}
                 >
                   Record sale
                 </Button>
@@ -2680,6 +3409,24 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
                   </TableCell>
                 </TableRow>
               ))}
+              {inventoryLots.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell>
+                    <strong>{item.name}</strong>
+                    <small className="table-sub">Persisted demo lot</small>
+                  </TableCell>
+                  <TableCell>{item.remainingQuantity}</TableCell>
+                  <TableCell className="mono">
+                    {money(item.allInBasis)}
+                  </TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell>New</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">Demo saved</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </Panel>
@@ -2716,10 +3463,193 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
           Estimated values are never labelled as realised profit. One completed
           demo sale was profitable and one was loss-making; both remain visible.
         </p>
-        <Button variant="outline" className="iron-button">
+        <Button
+          variant="outline"
+          className="iron-button"
+          onClick={() => {
+            const rows = [
+              ['Lot', 'Quantity', 'All-in basis'],
+              ...holdings.map((item) => [item.name, item.qty, item.basis]),
+              ...inventoryLots.map((item) => [
+                item.name,
+                item.remainingQuantity,
+                item.allInBasis,
+              ]),
+            ];
+            const csv = rows.map((row) => row.join(',')).join('\n');
+            const url = URL.createObjectURL(
+              new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+            );
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'tcg-scout-accounting.csv';
+            link.click();
+            URL.revokeObjectURL(url);
+            onNotice('Accounting CSV exported.');
+          }}
+        >
           Export accounting CSV
         </Button>
       </Panel>
+      <Dialog open={purchaseOpen} onOpenChange={setPurchaseOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record purchase</DialogTitle>
+            <DialogDescription>
+              Creates a persisted demo purchase and inventory lot.
+            </DialogDescription>
+          </DialogHeader>
+          <label>
+            <span>Quantity</span>
+            <Input
+              type="number"
+              min="1"
+              value={purchaseQuantity}
+              onChange={(event) =>
+                setPurchaseQuantity(Number(event.target.value))
+              }
+            />
+          </label>
+          <label>
+            <span>Item price</span>
+            <Input
+              type="number"
+              value={purchaseItemPrice}
+              onChange={(event) =>
+                setPurchaseItemPrice(Number(event.target.value))
+              }
+            />
+          </label>
+          <label>
+            <span>Acquisition costs</span>
+            <Input
+              type="number"
+              value={purchaseCosts}
+              onChange={(event) => setPurchaseCosts(Number(event.target.value))}
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              className="gold-button"
+              disabled={portfolioBusy}
+              onClick={async () => {
+                setPortfolioBusy(true);
+                try {
+                  const response = await fetch('/api/purchases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      dealId: deals[0]?.id,
+                      quantity: purchaseQuantity,
+                      itemPrice: purchaseItemPrice,
+                      acquisitionCosts: purchaseCosts,
+                      strategy: 'Quick flip',
+                    }),
+                  });
+                  const payload = (await response.json()) as { error?: string };
+                  if (!response.ok)
+                    throw new Error(
+                      payload.error ?? 'Purchase could not be saved',
+                    );
+                  await loadInventory();
+                  setPurchaseOpen(false);
+                  onNotice('Purchase and inventory lot saved.');
+                } catch (error) {
+                  onNotice(
+                    error instanceof Error ? error.message : 'Purchase failed',
+                  );
+                } finally {
+                  setPortfolioBusy(false);
+                }
+              }}
+            >
+              {portfolioBusy ? 'Saving…' : 'Save purchase'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={saleOpen} onOpenChange={setSaleOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record completed sale</DialogTitle>
+            <DialogDescription>
+              Realised profit is calculated only after this persisted sale.
+            </DialogDescription>
+          </DialogHeader>
+          <label>
+            <span>Inventory lot</span>
+            <Select
+              value={saleLotId}
+              onValueChange={(value) => setSaleLotId(value ?? '')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {inventoryLots.map((lot) => (
+                  <SelectItem key={lot.id} value={lot.id}>
+                    {lot.name} · {lot.remainingQuantity} available
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label>
+            <span>Gross proceeds</span>
+            <Input
+              type="number"
+              value={saleGross}
+              onChange={(event) => setSaleGross(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            <span>Selling costs</span>
+            <Input
+              type="number"
+              value={saleCosts}
+              onChange={(event) => setSaleCosts(Number(event.target.value))}
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              className="gold-button"
+              disabled={portfolioBusy || !saleLotId}
+              onClick={async () => {
+                setPortfolioBusy(true);
+                try {
+                  const response = await fetch('/api/sales', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      inventoryLotId: saleLotId,
+                      quantity: 1,
+                      venue: 'Demo completed sale',
+                      gross: saleGross,
+                      costs: saleCosts,
+                    }),
+                  });
+                  const payload = (await response.json()) as { error?: string };
+                  if (!response.ok)
+                    throw new Error(payload.error ?? 'Sale could not be saved');
+                  await loadInventory();
+                  setSaleOpen(false);
+                  onNotice(
+                    'Completed sale saved and realised profit calculated.',
+                  );
+                } catch (error) {
+                  onNotice(
+                    error instanceof Error ? error.message : 'Sale failed',
+                  );
+                } finally {
+                  setPortfolioBusy(false);
+                }
+              }}
+            >
+              {portfolioBusy ? 'Saving…' : 'Save completed sale'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2746,15 +3676,21 @@ function ExposureBar({
 }
 
 function WatchlistPage({
+  deals: records,
   onInspect,
+  onOpenListing,
   onTrack,
+  recheckingIds,
   trackedIds,
 }: {
+  deals: Deal[];
   onInspect: (deal: Deal) => void;
-  onTrack: (id: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  recheckingIds: Set<string>;
   trackedIds: Set<string>;
 }) {
-  const watched = deals.filter((item) => trackedIds.has(item.id));
+  const watched = records.filter((item) => trackedIds.has(item.id));
   return (
     <div className="page-stack">
       <Panel className="watch-command">
@@ -2768,11 +3704,23 @@ function WatchlistPage({
             listing price.
           </p>
         </div>
-        <Button className="gold-button">Create watch rule</Button>
+        <Button
+          className="gold-button"
+          onClick={() => {
+            window.location.href = '/alerts';
+          }}
+        >
+          Create watch rule
+        </Button>
       </Panel>
       <div className="watchlist-grid">
         {watched.map((item) => (
-          <Panel className="watch-product" key={item.id}>
+          <Panel
+            className="watch-product"
+            data-economics-surface="watchtower"
+            data-deal-id={item.id}
+            key={item.id}
+          >
             <div className="watch-product-top">
               <ProductGlyph deal={item} compact />
               <div>
@@ -2783,12 +3731,12 @@ function WatchlistPage({
               </div>
               <Badge
                 className={
-                  item.economics.allInCost <= item.economics.maximumItemPrice
+                  allInCostWithinMaximum(item.economics)
                     ? 'positive-badge'
                     : 'warning-badge'
                 }
               >
-                {item.economics.allInCost <= item.economics.maximumItemPrice
+                {allInCostWithinMaximum(item.economics)
                   ? 'Below target'
                   : 'Near target'}
               </Badge>
@@ -2801,13 +3749,13 @@ function WatchlistPage({
               <Progress
                 value={Math.min(
                   100,
-                  (item.economics.maximumItemPrice / item.economics.allInCost) *
+                  (item.economics.maximumAllInCost / item.economics.allInCost) *
                     100,
                 )}
               />
               <span>
-                Max buy{' '}
-                <b className="mono">{money(item.economics.maximumItemPrice)}</b>
+                Max all-in{' '}
+                <b className="mono">{money(item.economics.maximumAllInCost)}</b>
               </span>
             </div>
             <div className="card-actions">
@@ -2817,9 +3765,22 @@ function WatchlistPage({
               <Button
                 variant="outline"
                 className="iron-button"
-                onClick={() => onTrack(item.id)}
+                onClick={() => void onTrack(item.id)}
               >
                 Remove
+              </Button>
+              <Button
+                variant="outline"
+                className="iron-button"
+                disabled={recheckingIds.has(item.id)}
+                onClick={() => onOpenListing(item)}
+              >
+                {recheckingIds.has(item.id) ? (
+                  <RefreshCw className="spin" />
+                ) : (
+                  <ExternalLink />
+                )}
+                {recheckingIds.has(item.id) ? 'Rechecking…' : 'Open listing'}
               </Button>
             </div>
           </Panel>
@@ -2831,29 +3792,40 @@ function WatchlistPage({
           subtitle="Deduplicated and subject to cooldowns"
         />
         <WatchEvent
+          deal={watched[0] ?? records[0] ?? null}
           tone="critical"
           title="Critical · all-in below maximum buy"
-          detail="Prismatic ETB pair · confidence A · 97% match"
           time="11m"
+          onOpenListing={onOpenListing}
+          rechecking={Boolean(
+            (watched[0] ?? records[0]) &&
+            recheckingIds.has((watched[0] ?? records[0]).id),
+          )}
         />
         <WatchEvent
+          deal={records[1] ?? null}
           tone="positive"
           title="New sold evidence"
           detail="Destined Rivals · 3 comparable transactions"
           time="47m"
+          onOpenListing={onOpenListing}
+          rechecking={Boolean(records[1] && recheckingIds.has(records[1].id))}
         />
         <WatchEvent
+          deal={records[2] ?? null}
           tone="warning"
           title="Price changed after alert"
           detail="Origins display no longer profitable after fees"
           time="2h"
+          onOpenListing={onOpenListing}
+          rechecking={Boolean(records[2] && recheckingIds.has(records[2].id))}
         />
       </Panel>
     </div>
   );
 }
 
-function ShadowPage() {
+function ShadowPage({ trades }: { trades: ShadowTradeRow[] }) {
   return (
     <div className="page-stack">
       <Panel className="shadow-intro">
@@ -2921,29 +3893,41 @@ function ShadowPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {shadowTrades.map((trade) => (
-                <TableRow key={trade.id}>
-                  <TableCell>
-                    <strong>{trade.name}</strong>
-                  </TableCell>
-                  <TableCell>{trade.detected}</TableCell>
-                  <TableCell className="mono">
-                    {money(trade.predictedProfit)}
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      'mono',
-                      trade.laterProfit < 0 ? 'negative' : 'positive',
-                    )}
+              {trades.map((trade) => {
+                const laterProfit =
+                  trade.laterSupportedNetExit == null
+                    ? null
+                    : trade.laterSupportedNetExit - trade.economics.allInCost;
+                return (
+                  <TableRow
+                    key={trade.id}
+                    data-economics-surface="shadow"
+                    data-deal-id={trade.dealId}
                   >
-                    {money(trade.laterProfit)}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{trade.status}</Badge>
-                  </TableCell>
-                  <TableCell>{trade.followUp}</TableCell>
-                </TableRow>
-              ))}
+                    <TableCell>
+                      <strong>{trade.name}</strong>
+                    </TableCell>
+                    <TableCell>{trade.detected}</TableCell>
+                    <TableCell className="mono">
+                      {money(trade.economics.conservativeProfit)}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'mono',
+                        laterProfit != null && laterProfit < 0
+                          ? 'negative'
+                          : 'positive',
+                      )}
+                    >
+                      {laterProfit == null ? '—' : money(laterProfit)}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{trade.status}</Badge>
+                    </TableCell>
+                    <TableCell>{trade.followUp}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </Panel>
@@ -2979,8 +3963,94 @@ function CalibrationBar({ label, value }: { label: string; value: number }) {
   );
 }
 
-function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
-  const [critical, setCritical] = useState(90);
+function AlertsPage({
+  deal,
+  onInspect,
+  onNotice,
+  onOpenListing,
+  recheckingIds,
+  userSignedIn,
+}: {
+  deal: Deal | null;
+  onInspect: (deal: Deal) => void;
+  onNotice: (text: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  recheckingIds: Set<string>;
+  userSignedIn: boolean;
+}) {
+  const [critical, setCritical] = useState<number>(
+    QUICK_FLIP_GATE.matchConfidence,
+  );
+  const [minimumProfit, setMinimumProfit] = useState<number>(
+    QUICK_FLIP_GATE.minimumProfit,
+  );
+  const [minimumRoi, setMinimumRoi] = useState(
+    QUICK_FLIP_GATE.minimumRoi * 100,
+  );
+  const [minimumProfitPerHour, setMinimumProfitPerHour] = useState<number>(
+    QUICK_FLIP_GATE.minimumProfitPerHour,
+  );
+  const [minimumGrade, setMinimumGrade] = useState('B');
+  const [maximumHoldingDays, setMaximumHoldingDays] = useState<number>(
+    QUICK_FLIP_GATE.maximumHoldingDays,
+  );
+  const [savingRules, setSavingRules] = useState(false);
+  useEffect(() => {
+    if (!userSignedIn) return;
+    void fetch('/api/alert-rules')
+      .then(
+        async (response) =>
+          (await response.json()) as {
+            data?: {
+              matchConfidence: number;
+              minimumProfit: number;
+              minimumRoi: number;
+              minimumProfitPerHour: number;
+              minimumGrade: string;
+              maximumHoldingDays: number;
+            };
+          },
+      )
+      .then((payload) => {
+        if (!payload.data) return;
+        setCritical(payload.data.matchConfidence);
+        setMinimumProfit(payload.data.minimumProfit);
+        setMinimumRoi(Math.round(payload.data.minimumRoi * 100));
+        setMinimumProfitPerHour(payload.data.minimumProfitPerHour);
+        setMinimumGrade(payload.data.minimumGrade);
+        setMaximumHoldingDays(payload.data.maximumHoldingDays);
+      });
+  }, [userSignedIn]);
+  const saveRules = async () => {
+    if (!userSignedIn) {
+      onNotice('Sign in with ChatGPT before saving alert rules.');
+      return;
+    }
+    setSavingRules(true);
+    try {
+      const response = await fetch('/api/alert-rules', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchConfidence: critical,
+          minimumProfit,
+          minimumRoi: minimumRoi / 100,
+          minimumProfitPerHour,
+          minimumGrade,
+          maximumHoldingDays,
+          maximumRiskScore: QUICK_FLIP_GATE.maximumRiskScore,
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(payload.error ?? 'Alert rules could not be saved');
+      onNotice('Alert rules saved to your account.');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Alert rules failed');
+    } finally {
+      setSavingRules(false);
+    }
+  };
   return (
     <div className="page-stack">
       <Panel className="alert-rule-builder">
@@ -2990,9 +4060,10 @@ function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
           action={
             <Button
               className="gold-button"
-              onClick={() => onNotice('Alert thresholds saved for Demo Mode.')}
+              disabled={savingRules}
+              onClick={() => void saveRules()}
             >
-              Save rules
+              {savingRules ? 'Saving…' : 'Save rules'}
             </Button>
           }
         />
@@ -3011,27 +4082,46 @@ function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
           <label>
             <span>Net profit</span>
             <div className="rule-input">
-              <Input defaultValue="25" />
+              <Input
+                type="number"
+                value={minimumProfit}
+                onChange={(event) =>
+                  setMinimumProfit(Number(event.target.value))
+                }
+              />
               <b>EUR minimum</b>
             </div>
           </label>
           <label>
             <span>ROI</span>
             <div className="rule-input">
-              <Input defaultValue="20" />
+              <Input
+                type="number"
+                value={minimumRoi}
+                onChange={(event) => setMinimumRoi(Number(event.target.value))}
+              />
               <b>% minimum</b>
             </div>
           </label>
           <label>
             <span>Profit per hour</span>
             <div className="rule-input">
-              <Input defaultValue="20" />
+              <Input
+                type="number"
+                value={minimumProfitPerHour}
+                onChange={(event) =>
+                  setMinimumProfitPerHour(Number(event.target.value))
+                }
+              />
               <b>EUR minimum</b>
             </div>
           </label>
           <label>
             <span>Confidence grade</span>
-            <Select defaultValue="B">
+            <Select
+              value={minimumGrade}
+              onValueChange={(value) => setMinimumGrade(value ?? 'B')}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -3044,7 +4134,12 @@ function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
           </label>
           <label>
             <span>Expected sale window</span>
-            <Select defaultValue="90">
+            <Select
+              value={String(maximumHoldingDays)}
+              onValueChange={(value) =>
+                setMaximumHoldingDays(Number(value ?? 90))
+              }
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -3059,39 +4154,50 @@ function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
         <div className="logic-strip">
           <span>Match ≥ {critical}%</span>
           <b>AND</b>
-          <span>Profit ≥ €25</span>
+          <span>Profit ≥ {money(minimumProfit)}</span>
           <b>AND</b>
-          <span>ROI ≥ 20%</span>
+          <span>ROI ≥ {minimumRoi}%</span>
           <b>AND</b>
-          <span>Grade ≥ B</span>
+          <span>Grade ≥ {minimumGrade}</span>
           <b>AND</b>
-          <span>Risk &lt; 60</span>
+          <span>Risk ≤ {QUICK_FLIP_GATE.maximumRiskScore}</span>
         </div>
       </Panel>
       <div className="alerts-layout">
         <Panel>
           <SectionHeading
             title="Recent alerts"
-            subtitle="1 critical · 2 high · 4 medium"
+            subtitle="Fictional demonstration feed · 3 visible"
           />
           <div className="alert-feed">
-            <AlertItem
-              priority="Critical"
-              title="Prismatic ETB pair below maximum buy"
-              detail="€126.45 all-in · €27.95 profit · 22.1% ROI · confidence A"
-              time="11m"
-            />
+            {deal ? (
+              <AlertItem
+                deal={deal}
+                priority="Critical"
+                title={`${deal.canonicalProduct} below maximum all-in`}
+                time="11m"
+                onOpen={() => onInspect(deal)}
+                onOpenListing={() => onOpenListing(deal)}
+                rechecking={recheckingIds.has(deal.id)}
+              />
+            ) : null}
             <AlertItem
               priority="High"
               title="Destined Rivals price cut"
               detail="Recheck required before action · exit eBay NL"
               time="37m"
+              onOpen={() => {
+                window.location.href = '/deals';
+              }}
             />
             <AlertItem
               priority="Medium"
               title="Official Spiritforged preorder open"
               detail="7 retailers · €129–€159 · high interest"
               time="3h"
+              onOpen={() => {
+                window.location.href = '/releases';
+              }}
             />
           </div>
         </Panel>
@@ -3143,35 +4249,94 @@ function AlertsPage({ onNotice }: { onNotice: (text: string) => void }) {
 }
 
 function AlertItem({
+  deal,
   priority,
   title,
   detail,
   time,
+  onOpen,
+  onOpenListing,
+  rechecking = false,
 }: {
+  deal?: Deal;
   priority: string;
   title: string;
-  detail: string;
+  detail?: string;
   time: string;
+  onOpen: () => void;
+  onOpenListing?: () => void;
+  rechecking?: boolean;
 }) {
+  const derivedDetail = deal
+    ? `${economicsCopy(deal.economics).allInCost} all-in · ${economicsCopy(deal.economics).conservativeProfit} profit · ${economicsCopy(deal.economics).roi} ROI · confidence ${deal.confidenceGrade}`
+    : detail;
   return (
-    <div className={cn('alert-item', priority.toLowerCase())}>
+    <div
+      className={cn('alert-item', priority.toLowerCase())}
+      data-economics-surface={deal ? 'alerts' : undefined}
+      data-deal-id={deal?.id}
+    >
       <span className="alert-seal">
         <Bell />
       </span>
       <div>
         <span className="eyebrow">{priority}</span>
         <h3>{title}</h3>
-        <p>{detail}</p>
+        <p>{derivedDetail}</p>
       </div>
       <time>{time}</time>
-      <Button variant="outline" className="iron-button">
+      <Button variant="outline" className="iron-button" onClick={onOpen}>
         Open
       </Button>
+      {deal && onOpenListing ? (
+        <Button
+          variant="outline"
+          className="iron-button"
+          disabled={rechecking}
+          onClick={onOpenListing}
+        >
+          {rechecking ? <RefreshCw className="spin" /> : <ExternalLink />}
+          {rechecking ? 'Rechecking…' : 'Open listing'}
+        </Button>
+      ) : null}
     </div>
   );
 }
 
 function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
+  const [testingSourceId, setTestingSourceId] = useState<string | null>(null);
+  const [sourceResults, setSourceResults] = useState<
+    Record<string, { ok: boolean; status: string; checkedAt: string }>
+  >({});
+  const testSource = async (sourceId: string, sourceName: string) => {
+    const apiId = sourceId === 'cardmarket' ? 'cardmarket-public' : sourceId;
+    setTestingSourceId(sourceId);
+    try {
+      const response = await fetch(
+        `/api/sources/${encodeURIComponent(apiId)}/test`,
+        { method: 'POST' },
+      );
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        status?: string;
+        checkedAt?: string;
+        error?: string;
+      };
+      const result = {
+        ok: Boolean(payload.ok),
+        status: payload.status ?? payload.error ?? `HTTP ${response.status}`,
+        checkedAt: payload.checkedAt ?? new Date().toISOString(),
+      };
+      setSourceResults((current) => ({ ...current, [sourceId]: result }));
+      onNotice(`${sourceName}: ${result.status}.`);
+    } catch (error) {
+      onNotice(
+        error instanceof Error ? error.message : 'Connection test failed',
+      );
+    } finally {
+      setTestingSourceId(null);
+    }
+  };
   return (
     <div className="page-stack">
       <Panel className="source-overview">
@@ -3186,9 +4351,19 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
           </p>
         </div>
         <div className="source-count">
-          <strong>2</strong>
-          <span>fixture sources healthy</span>
-          <small>0 genuinely live without credentials</small>
+          <strong>
+            {sources.filter((source) => source.mode === 'Fixture').length}
+          </strong>
+          <span>isolated fixture connector</span>
+          <small>
+            {
+              sources.filter(
+                (source) =>
+                  source.mode === 'Live' && source.health === 'Healthy',
+              ).length
+            }{' '}
+            genuinely live
+          </small>
         </div>
       </Panel>
       <div className="source-card-grid">
@@ -3233,19 +4408,37 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
               <ShieldAlert />
               {source.note}
             </div>
+            {sourceResults[source.id] ? (
+              <output className="safety-note">
+                <HeartPulse />
+                <span>
+                  {sourceResults[source.id].ok ? 'Connected' : 'Not connected'}{' '}
+                  · {sourceResults[source.id].status} ·{' '}
+                  {new Date(
+                    sourceResults[source.id].checkedAt,
+                  ).toLocaleTimeString('nl-NL')}
+                </span>
+              </output>
+            ) : null}
             <div className="card-actions">
-              <Button variant="outline" className="iron-button">
+              <Button
+                variant="outline"
+                className="iron-button"
+                onClick={() => {
+                  window.location.href = '/settings';
+                }}
+              >
                 Configure
               </Button>
               <Button
                 className="gold-button"
-                onClick={() =>
-                  onNotice(
-                    `${source.name} connection test complete: ${source.health}.`,
-                  )
-                }
+                disabled={testingSourceId === source.id}
+                onClick={() => void testSource(source.id, source.name)}
               >
-                <RefreshCw /> Test connection
+                <RefreshCw
+                  className={cn(testingSourceId === source.id && 'spin')}
+                />
+                {testingSourceId === source.id ? 'Testing…' : 'Test connection'}
               </Button>
             </div>
           </Panel>
@@ -3255,14 +4448,101 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
   );
 }
 
-function ReviewPage({ onNotice }: { onNotice: (text: string) => void }) {
-  const [items, setItems] = useState(fixtureReviewItems);
-  const resolve = (id: string) => {
-    const title = items.find((item) => item.id === id)?.title;
-    setItems((current) => current.filter((item) => item.id !== id));
-    onNotice(
-      `Resolved: ${title}. The correction is recorded for future matching.`,
-    );
+function ReviewPage({
+  onNotice,
+  userSignedIn,
+}: {
+  onNotice: (text: string) => void;
+  userSignedIn: boolean;
+}) {
+  const [items, setItems] = useState<ReviewQueueItem[]>(() =>
+    userSignedIn ? [] : (fixtureReviewItems as ReviewQueueItem[]),
+  );
+  const [loading, setLoading] = useState(userSignedIn);
+  const [activeItem, setActiveItem] = useState<ReviewQueueItem | null>(null);
+  const [resolution, setResolution] = useState('accept_candidate');
+  const [candidate, setCandidate] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!userSignedIn) return;
+    let cancelled = false;
+    void fetch('/api/review')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Review queue could not be loaded.');
+        return (await response.json()) as { data: ReviewQueueItem[] };
+      })
+      .then((payload) => {
+        if (!cancelled) setItems(payload.data);
+      })
+      .catch((error) => {
+        if (!cancelled)
+          onNotice(
+            error instanceof Error ? error.message : 'Review queue failed.',
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onNotice, userSignedIn]);
+
+  const openReview = (item: ReviewQueueItem) => {
+    setActiveItem(item);
+    setResolution('accept_candidate');
+    setCandidate(item.currentCandidate);
+    setQuantity(String(item.quantity));
+  };
+
+  const resolve = async () => {
+    if (!activeItem) return;
+    if (!userSignedIn) {
+      onNotice('Sign in with ChatGPT before resolving review records.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(
+        `/api/review/${encodeURIComponent(activeItem.id)}/resolve`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            resolution,
+            details: {
+              candidate: candidate.trim(),
+              quantity: Math.max(1, Number.parseInt(quantity) || 1),
+              originalTitle: activeItem.originalTitle,
+            },
+          }),
+        },
+      );
+      const payload = (await response.json()) as {
+        data?: { status: string };
+        error?: string;
+      };
+      if (!response.ok || !payload.data)
+        throw new Error(payload.error ?? 'Review resolution failed.');
+      if (payload.data.status === 'resolved')
+        setItems((current) =>
+          current.filter((item) => item.id !== activeItem.id),
+        );
+      setActiveItem(null);
+      onNotice(
+        resolution === 'defer'
+          ? 'Review deferred; the record remains in the queue.'
+          : `Resolution saved before ${activeItem.title} left the queue.`,
+      );
+    } catch (error) {
+      onNotice(
+        error instanceof Error ? error.message : 'Review resolution failed.',
+      );
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <div className="page-stack">
@@ -3290,7 +4570,15 @@ function ReviewPage({ onNotice }: { onNotice: (text: string) => void }) {
           <small>oldest 1 hour</small>
         </div>
       </Panel>
-      {items.length ? (
+      {loading ? (
+        <Panel className="empty-state">
+          <RefreshCw className="spin" />
+          <h2>Loading your review queue</h2>
+          <p>
+            Waiting for the account-scoped records before accepting changes.
+          </p>
+        </Panel>
+      ) : items.length ? (
         <Panel className="data-table-panel">
           <Table>
             <TableHeader>
@@ -3337,7 +4625,7 @@ function ReviewPage({ onNotice }: { onNotice: (text: string) => void }) {
                   <TableCell>
                     <Button
                       className="gold-button"
-                      onClick={() => resolve(item.id)}
+                      onClick={() => openReview(item)}
                     >
                       Review
                     </Button>
@@ -3357,11 +4645,207 @@ function ReviewPage({ onNotice }: { onNotice: (text: string) => void }) {
           </p>
         </Panel>
       )}
+      <Dialog
+        open={Boolean(activeItem)}
+        onOpenChange={(open) => !open && !saving && setActiveItem(null)}
+      >
+        <DialogContent className="review-dialog">
+          <DialogHeader>
+            <DialogTitle>Resolve uncertain record</DialogTitle>
+            <DialogDescription>
+              Inspect the original listing and record an explicit outcome. The
+              item only leaves the queue after the server confirms persistence.
+            </DialogDescription>
+          </DialogHeader>
+          {activeItem ? (
+            <div className="review-dialog-grid">
+              <div className="review-original">
+                <span className="eyebrow">Original listing title</span>
+                <h3>{activeItem.originalTitle}</h3>
+                <dl>
+                  <div>
+                    <dt>Source</dt>
+                    <dd>{activeItem.source}</dd>
+                  </div>
+                  <div>
+                    <dt>Confidence</dt>
+                    <dd>{activeItem.confidence}%</dd>
+                  </div>
+                  <div>
+                    <dt>Condition</dt>
+                    <dd>{activeItem.condition}</dd>
+                  </div>
+                  <div>
+                    <dt>Language</dt>
+                    <dd>{activeItem.language}</dd>
+                  </div>
+                </dl>
+                <div className="risk-list">
+                  {activeItem.riskFlags.map((flag) => (
+                    <Badge variant="outline" key={flag}>
+                      {flag}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              <div className="review-resolution">
+                <label>
+                  <span>Resolution</span>
+                  <Select
+                    value={resolution}
+                    onValueChange={(value) => value && setResolution(value)}
+                  >
+                    <SelectTrigger aria-label="Review resolution">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="accept_candidate">
+                        Accept current candidate
+                      </SelectItem>
+                      <SelectItem value="select_alternative">
+                        Select alternative
+                      </SelectItem>
+                      <SelectItem value="edit_fields">Edit fields</SelectItem>
+                      <SelectItem value="packaging_only">
+                        Packaging only
+                      </SelectItem>
+                      <SelectItem value="duplicate">Duplicate</SelectItem>
+                      <SelectItem value="reject_listing">
+                        Reject listing
+                      </SelectItem>
+                      <SelectItem value="defer">Defer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label>
+                  <span>Canonical candidate</span>
+                  <Input
+                    value={candidate}
+                    onChange={(event) => setCandidate(event.target.value)}
+                  />
+                </label>
+                {activeItem.alternativeCandidates.length ? (
+                  <div className="candidate-options">
+                    <span>Suggested alternatives</span>
+                    {activeItem.alternativeCandidates.map((alternative) => (
+                      <Button
+                        variant="outline"
+                        className="iron-button"
+                        key={alternative}
+                        onClick={() => {
+                          setCandidate(alternative);
+                          setResolution('select_alternative');
+                        }}
+                      >
+                        {alternative}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+                <label>
+                  <span>Quantity</span>
+                  <Input
+                    inputMode="numeric"
+                    value={quantity}
+                    onChange={(event) => setQuantity(event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="iron-button"
+              disabled={saving}
+              onClick={() => setActiveItem(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="gold-button"
+              disabled={saving || !candidate.trim()}
+              onClick={() => void resolve()}
+            >
+              {saving ? 'Saving resolution…' : 'Save resolution'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function SettingsPage({ onNotice }: { onNotice: (text: string) => void }) {
+function SettingsPage({
+  onNotice,
+  userSignedIn,
+}: {
+  onNotice: (text: string) => void;
+  userSignedIn: boolean;
+}) {
+  const [settings, setSettings] = useState<UserSettings>(defaultUserSettings);
+  const [saving, setSaving] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(!userSignedIn);
+
+  useEffect(() => {
+    if (!userSignedIn) return;
+    let cancelled = false;
+    void fetch('/api/settings')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Settings could not be loaded.');
+        return (await response.json()) as { data: UserSettings };
+      })
+      .then((payload) => {
+        if (!cancelled) setSettings(payload.data);
+      })
+      .catch((error) => {
+        if (!cancelled)
+          onNotice(
+            error instanceof Error ? error.message : 'Settings load failed.',
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onNotice, userSignedIn]);
+
+  const saveSettings = async () => {
+    if (!userSignedIn) {
+      onNotice('Sign in with ChatGPT before saving settings.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      const payload = (await response.json()) as {
+        data?: UserSettings;
+        error?: string;
+      };
+      if (!response.ok || !payload.data)
+        throw new Error(payload.error ?? 'Settings could not be saved.');
+      setSettings(payload.data);
+      onNotice('Settings saved to your account.');
+    } catch (error) {
+      onNotice(
+        error instanceof Error ? error.message : 'Settings save failed.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetSettings = () => {
+    setSettings(defaultUserSettings);
+    onNotice('Defaults restored locally. Save settings to persist them.');
+  };
+
   return (
     <div className="page-stack settings-layout">
       <Tabs defaultValue="region">
@@ -3380,7 +4864,16 @@ function SettingsPage({ onNotice }: { onNotice: (text: string) => void }) {
             <div className="settings-grid">
               <label>
                 <span>Home country</span>
-                <Select defaultValue="nl">
+                <Select
+                  value={settings.country.toLowerCase()}
+                  onValueChange={(value) =>
+                    value &&
+                    setSettings((current) => ({
+                      ...current,
+                      country: value.toUpperCase(),
+                    }))
+                  }
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -3393,58 +4886,76 @@ function SettingsPage({ onNotice }: { onNotice: (text: string) => void }) {
               </label>
               <label>
                 <span>Postcode</span>
-                <Input defaultValue="3511" />
+                <Input
+                  disabled={!settingsLoaded || saving}
+                  value={settings.postcode}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      postcode: event.target.value,
+                    }))
+                  }
+                />
               </label>
               <label>
                 <span>Local radius</span>
-                <Input defaultValue="50 km" />
+                <Input
+                  disabled={!settingsLoaded || saving}
+                  inputMode="numeric"
+                  value={settings.localRadiusKm}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      localRadiusKm: Number(event.target.value),
+                    }))
+                  }
+                />
               </label>
               <label>
                 <span>Currency</span>
-                <Select defaultValue="eur">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="eur">EUR (€)</SelectItem>
-                    <SelectItem value="gbp">GBP (£)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input value="EUR (€)" readOnly />
               </label>
               <label>
                 <span>Timezone</span>
-                <Input defaultValue="Europe/Amsterdam" readOnly />
+                <Input value={settings.timezone} readOnly />
               </label>
               <label>
                 <span>Travel cost</span>
-                <Input defaultValue="€0.23 / km" />
+                <Input value="€0.23 / km (model default)" readOnly />
               </label>
               <label>
                 <span>Labour rate</span>
-                <Input defaultValue="€18 / hour" />
+                <Input
+                  disabled={!settingsLoaded || saving}
+                  inputMode="decimal"
+                  value={settings.laborRate}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      laborRate: Number(event.target.value),
+                    }))
+                  }
+                />
               </label>
               <label>
                 <span>Default exit</span>
-                <Select defaultValue="best">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="best">Best supported exit</SelectItem>
-                    <SelectItem value="cardmarket">Cardmarket</SelectItem>
-                    <SelectItem value="ebay">eBay</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input value="Best supported sold evidence" readOnly />
               </label>
             </div>
             <div className="button-row">
               <Button
                 className="gold-button"
-                onClick={() => onNotice('Settings saved for Demo Mode.')}
+                disabled={saving || !settingsLoaded}
+                onClick={() => void saveSettings()}
               >
-                Save settings
+                {saving ? 'Saving…' : 'Save settings'}
               </Button>
-              <Button variant="outline" className="iron-button">
+              <Button
+                variant="outline"
+                className="iron-button"
+                disabled={saving || !settingsLoaded}
+                onClick={resetSettings}
+              >
                 Reset defaults
               </Button>
             </div>
@@ -3463,7 +4974,47 @@ function SettingsPage({ onNotice }: { onNotice: (text: string) => void }) {
             <ScoreWeight label="Data confidence" value="10%" />
             <ScoreWeight label="Listing freshness" value="10%" />
             <ScoreWeight label="Cross-market edge" value="5%" />
-            <Button className="gold-button">Save weights</Button>
+            <p className="settings-note">
+              Weights are fixed in the versioned deal-economics model. Your
+              personal qualification gates are stored separately.
+            </p>
+            <div className="settings-grid">
+              <label>
+                <span>Required ROI</span>
+                <Input
+                  disabled={!settingsLoaded || saving}
+                  inputMode="decimal"
+                  value={Math.round(settings.requiredRoi * 100)}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      requiredRoi: Number(event.target.value) / 100,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>Required profit (€)</span>
+                <Input
+                  disabled={!settingsLoaded || saving}
+                  inputMode="decimal"
+                  value={settings.requiredProfit}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      requiredProfit: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <Button
+              className="gold-button"
+              disabled={saving || !settingsLoaded}
+              onClick={() => void saveSettings()}
+            >
+              {saving ? 'Saving…' : 'Save scoring gates'}
+            </Button>
           </Panel>
         </TabsContent>
         <TabsContent value="security">
@@ -3518,27 +5069,11 @@ function SettingsPage({ onNotice }: { onNotice: (text: string) => void }) {
             <div className="settings-grid">
               <label>
                 <span>Data density</span>
-                <Select defaultValue="compact">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="compact">Compact</SelectItem>
-                    <SelectItem value="comfortable">Comfortable</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input value="Compact product preset" readOnly />
               </label>
               <label>
                 <span>Motion</span>
-                <Select defaultValue="system">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="system">Follow system</SelectItem>
-                    <SelectItem value="reduced">Reduced</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input value="Follows operating-system preference" readOnly />
               </label>
             </div>
           </Panel>

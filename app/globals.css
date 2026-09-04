@@ -2227,6 +2227,7 @@ body::after {
   border: 1px solid rgb(201 154 67 / 18%);
   border-radius: 50%;
   content: '';
+  pointer-events: none;
 }
 .lens-frame::after {
   inset: 72px;
@@ -2277,6 +2278,10 @@ body::after {
   margin-top: 0.5rem;
   color: #8f8674;
   font-size: 0.65rem;
+}
+.lens-frame > button {
+  position: relative;
+  z-index: 3;
 }
 .result-empty {
   height: 100%;
@@ -2675,6 +2680,89 @@ body::after {
   color: #8f8675;
   font-size: 0.62rem;
 }
+.verification-line,
+.settings-note {
+  color: #948a79;
+  font-size: 0.62rem;
+}
+.spin {
+  animation: scout-spin 0.8s linear infinite;
+}
+.lens-reticle {
+  pointer-events: none;
+}
+@keyframes scout-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.review-dialog {
+  width: min(900px, calc(100vw - 2rem)) !important;
+  max-width: 900px !important;
+}
+.review-dialog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.review-original,
+.review-resolution {
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 0.8rem;
+  border: 1px solid #4b3e2d;
+  background: #141714;
+}
+.review-original h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+}
+.review-original dl {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.55rem;
+}
+.review-original dl div {
+  display: grid;
+  gap: 0.15rem;
+}
+.review-original dt,
+.candidate-options > span {
+  color: #8e846f;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+.review-original dd {
+  margin: 0;
+  font-size: 0.67rem;
+}
+.candidate-options {
+  display: grid;
+  gap: 0.35rem;
+}
+.candidate-options button {
+  justify-content: flex-start;
+  height: auto;
+  min-height: 2rem;
+  white-space: normal;
+}
+.standalone-state {
+  width: min(680px, calc(100% - 2rem));
+  margin: 15vh auto;
+  padding: 2rem;
+  border: 1px solid #5c4930;
+  background: #151815;
+  text-align: center;
+}
+.standalone-state h1 {
+  margin: 0.5rem 0;
+  font-family: var(--font-display);
+}
+.standalone-state p {
+  margin: 0 0 1rem;
+  color: #9b927f;
+}
 .mobile-bottom-nav {
   display: none;
 }
@@ -3038,6 +3126,9 @@ body::after {
   }
   .rule-grid,
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .review-dialog-grid {
     grid-template-columns: 1fr;
   }
   .alert-item {

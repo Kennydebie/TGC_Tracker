@@ -11,6 +11,7 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+const e2eStatePath = process.env.TCG_SCOUT_E2E_STATE_PATH;
 
 const localBindingConfig = {
   main: 'vinext/server/fetch-handler',
@@ -55,6 +56,7 @@ export default defineConfig(async () => {
       cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
         config: localBindingConfig,
+        persistState: e2eStatePath ? { path: e2eStatePath } : true,
       }),
     ],
   };

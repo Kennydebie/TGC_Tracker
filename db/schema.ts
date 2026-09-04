@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -99,6 +100,34 @@ export const scanRuns = sqliteTable(
   ],
 );
 
+export const sourceRecords = sqliteTable(
+  'source_records',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => sources.id),
+    sourceListingId: text('source_listing_id').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    payloadHash: text('payload_hash').notNull(),
+    capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+  },
+  (table) => [
+    uniqueIndex('idx_source_records_source_hash').on(
+      table.sourceId,
+      table.payloadHash,
+    ),
+    index('idx_source_records_listing_time').on(
+      table.sourceId,
+      table.sourceListingId,
+      table.capturedAt,
+    ),
+  ],
+);
+
 export const listings = sqliteTable(
   'listings',
   {
@@ -107,10 +136,13 @@ export const listings = sqliteTable(
       .notNull()
       .references(() => sources.id),
     externalId: text('external_id').notNull(),
+    sourceListingId: text('source_listing_id').notNull().default(''),
+    sourceMarketplace: text('source_marketplace').notNull().default('legacy'),
     productId: text('product_id').references(() => products.id),
     sellerName: text('seller_name'),
     title: text('title').notNull(),
     url: text('url').notNull(),
+    sourceListingUrl: text('source_listing_url').notNull().default(''),
     itemPriceCents: integer('item_price_cents').notNull(),
     shippingCents: integer('shipping_cents'),
     currency: text('currency').notNull(),
@@ -119,6 +151,17 @@ export const listings = sqliteTable(
     language: text('language'),
     matchConfidenceBps: integer('match_confidence_bps'),
     status: text('status').notNull(),
+    availabilityStatus: text('availability_status')
+      .notNull()
+      .default('unknown'),
+    detectedAt: integer('detected_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`0`),
+    lastVerifiedAt: integer('last_verified_at', {
+      mode: 'timestamp_ms',
+    })
+      .notNull()
+      .default(sql`0`),
     firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
     demoRecord: integer('demo_record', { mode: 'boolean' })
@@ -132,6 +175,32 @@ export const listings = sqliteTable(
     ),
     index('idx_listings_product_status').on(table.productId, table.status),
     index('idx_listings_last_seen').on(table.lastSeenAt),
+  ],
+);
+
+export const listingSnapshots = sqliteTable(
+  'listing_snapshots',
+  {
+    id: text('id').primaryKey(),
+    listingId: text('listing_id')
+      .notNull()
+      .references(() => listings.id, { onDelete: 'cascade' }),
+    itemPriceCents: integer('item_price_cents').notNull(),
+    shippingCents: integer('shipping_cents'),
+    currency: text('currency').notNull(),
+    availabilityStatus: text('availability_status').notNull(),
+    contentHash: text('content_hash').notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_listing_snapshots_listing_hash').on(
+      table.listingId,
+      table.contentHash,
+    ),
+    index('idx_listing_snapshots_listing_time').on(
+      table.listingId,
+      table.observedAt,
+    ),
   ],
 );
 
@@ -182,6 +251,9 @@ export const valuationSnapshots = sqliteTable(
     assumptionsJson: text('assumptions_json').notNull(),
     modelVersion: text('model_version').notNull(),
     valuedAt: integer('valued_at', { mode: 'timestamp_ms' }).notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
   },
   (table) => [
     index('idx_valuations_product_time').on(table.productId, table.valuedAt),
@@ -208,16 +280,42 @@ export const dealScores = sqliteTable(
     roiBps: integer('roi_bps').notNull(),
     profitPerHourCents: integer('profit_per_hour_cents').notNull(),
     maximumItemPriceCents: integer('maximum_item_price_cents').notNull(),
+    maximumAllInCostCents: integer('maximum_all_in_cost_cents')
+      .notNull()
+      .default(0),
     preferredExit: text('preferred_exit').notNull(),
     explanationJson: text('explanation_json').notNull(),
     modelVersion: text('model_version').notNull(),
     scoredAt: integer('scored_at', { mode: 'timestamp_ms' }).notNull(),
+    demoRecord: integer('demo_record', { mode: 'boolean' })
+      .notNull()
+      .default(false),
   },
   (table) => [
     index('idx_deal_scores_listing_time').on(table.listingId, table.scoredAt),
     index('idx_deal_scores_instant_confidence').on(
       table.instantScore,
       table.confidenceGrade,
+    ),
+  ],
+);
+
+export const watchlists = sqliteTable(
+  'watchlists',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_watchlists_user_name_mode').on(
+      table.userId,
+      table.name,
+      table.dataMode,
     ),
   ],
 );
@@ -229,13 +327,41 @@ export const watchlistItems = sqliteTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    watchlistId: text('watchlist_id').references(() => watchlists.id, {
+      onDelete: 'cascade',
+    }),
     productId: text('product_id').references(() => products.id),
     listingId: text('listing_id').references(() => listings.id),
     targetAllInCents: integer('target_all_in_cents'),
     muted: integer('muted', { mode: 'boolean' }).notNull().default(false),
+    dataMode: text('data_mode').notNull().default('production'),
     ...timestamps,
   },
   (table) => [index('idx_watchlist_user').on(table.userId)],
+);
+
+export const alertRules = sqliteTable(
+  'alert_rules',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    matchConfidenceBps: integer('match_confidence_bps').notNull().default(9000),
+    minimumProfitCents: integer('minimum_profit_cents').notNull().default(2500),
+    minimumRoiBps: integer('minimum_roi_bps').notNull().default(2000),
+    minimumProfitPerHourCents: integer('minimum_profit_per_hour_cents')
+      .notNull()
+      .default(2000),
+    minimumGrade: text('minimum_grade').notNull().default('B'),
+    maximumHoldingDays: integer('maximum_holding_days').notNull().default(90),
+    maximumRiskScore: integer('maximum_risk_score').notNull().default(59),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [index('idx_alert_rules_user').on(table.userId, table.enabled)],
 );
 
 export const alerts = sqliteTable(
@@ -274,8 +400,11 @@ export const shadowTrades = sqliteTable(
     detectedPriceCents: integer('detected_price_cents').notNull(),
     executablePriceCents: integer('executable_price_cents'),
     predictedProfitCents: integer('predicted_profit_cents').notNull(),
+    economicsJson: text('economics_json').notNull().default('{}'),
+    modelVersion: text('model_version').notNull().default('legacy'),
     laterSupportedProfitCents: integer('later_supported_profit_cents'),
     status: text('status').notNull(),
+    dataMode: text('data_mode').notNull().default('production'),
     nextFollowUpAt: integer('next_follow_up_at', {
       mode: 'timestamp_ms',
     }).notNull(),
@@ -305,10 +434,37 @@ export const inventoryLots = sqliteTable(
     historicalFxRate: real('historical_fx_rate').notNull(),
     strategy: text('strategy').notNull(),
     storageLocation: text('storage_location'),
+    dataMode: text('data_mode').notNull().default('production'),
     ...timestamps,
   },
   (table) => [
     index('idx_inventory_user_product').on(table.userId, table.productId),
+  ],
+);
+
+export const purchases = sqliteTable(
+  'purchases',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    listingId: text('listing_id').references(() => listings.id),
+    productId: text('product_id')
+      .notNull()
+      .references(() => products.id),
+    inventoryLotId: text('inventory_lot_id').references(() => inventoryLots.id),
+    quantity: integer('quantity').notNull(),
+    purchasedAt: integer('purchased_at', { mode: 'timestamp_ms' }).notNull(),
+    itemPriceCents: integer('item_price_cents').notNull(),
+    acquisitionCostsCents: integer('acquisition_costs_cents').notNull(),
+    allInCostCents: integer('all_in_cost_cents').notNull(),
+    currency: text('currency').notNull(),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    index('idx_purchases_user_date').on(table.userId, table.purchasedAt),
   ],
 );
 
@@ -330,6 +486,7 @@ export const sales = sqliteTable(
     netProceedsCents: integer('net_proceeds_cents').notNull(),
     realisedProfitCents: integer('realised_profit_cents').notNull(),
     currency: text('currency').notNull(),
+    dataMode: text('data_mode').notNull().default('production'),
     ...timestamps,
   },
   (table) => [index('idx_sales_user_date').on(table.userId, table.soldAt)],
@@ -339,18 +496,26 @@ export const reviewQueue = sqliteTable(
   'review_queue',
   {
     id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
     sourceId: text('source_id').references(() => sources.id),
     listingId: text('listing_id').references(() => listings.id),
     kind: text('kind').notNull(),
     severity: text('severity').notNull(),
     payloadJson: text('payload_json').notNull(),
     status: text('status').notNull().default('open'),
+    dataMode: text('data_mode').notNull().default('production'),
     resolvedBy: text('resolved_by').references(() => users.id),
     resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [
-    index('idx_review_status_severity').on(table.status, table.severity),
+    index('idx_review_user_status_severity').on(
+      table.userId,
+      table.status,
+      table.severity,
+    ),
   ],
 );
 

@@ -8,6 +8,7 @@ import type {
   SourcePolicy,
   ValidationResult,
 } from './types.ts';
+import { validateSourceListingUrl } from '../listing-url.ts';
 
 type EbayConfig = {
   clientId?: string;
@@ -120,12 +121,19 @@ export class EbayBrowseConnector implements SourceConnector {
       typeof price.value !== 'string'
     )
       return [];
+    const listingUrl = validateSourceListingUrl('ebay', item.itemWebUrl);
     return [
       {
         sourceId: this.id,
         externalId: record.externalId,
+        sourceListingId: record.externalId,
+        sourceMarketplace: this.id,
         title: item.title,
-        url: item.itemWebUrl,
+        url: listingUrl.toString(),
+        sourceListingUrl: listingUrl.toString(),
+        detectedAt: record.capturedAt,
+        lastVerifiedAt: new Date().toISOString(),
+        availabilityStatus: 'available',
         itemPrice: Number(price.value),
         shipping:
           typeof shippingCost?.value === 'string'
@@ -143,6 +151,35 @@ export class EbayBrowseConnector implements SourceConnector {
         available: true,
       },
     ];
+  }
+
+  async getListing(sourceListingId: string): Promise<NormalisedOffer | null> {
+    const validation = await this.validateConfig();
+    if (!validation.valid) throw new Error(validation.errors.join('; '));
+    const safeId = encodeURIComponent(sourceListingId);
+    const response = await fetch(
+      `https://api.ebay.com/buy/browse/v1/item/${safeId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${await this.token()}`,
+          'X-EBAY-C-MARKETPLACE-ID': this.config.marketplace ?? 'EBAY_NL',
+        },
+        signal: AbortSignal.timeout(12_000),
+      },
+    );
+    if (response.status === 404) return null;
+    if (!response.ok)
+      throw new Error(
+        `eBay Browse item request failed with ${response.status}`,
+      );
+    const capturedAt = new Date().toISOString();
+    const offers = await this.normalise({
+      sourceId: this.id,
+      externalId: sourceListingId,
+      capturedAt,
+      payload: await response.json(),
+    });
+    return offers[0] ?? null;
   }
 
   getPolicy(): SourcePolicy {

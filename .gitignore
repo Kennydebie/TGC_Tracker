@@ -38,5 +38,7 @@ tsconfig.tsbuildinfo
 /dist/
 /dist-extension/
 /.wrangler/
+/test-results/
+/playwright-report/
 /outputs/
 /work/
