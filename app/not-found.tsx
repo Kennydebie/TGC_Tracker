@@ -1,6 +1,5 @@
-import Link from 'next/link';
-
 import { Button } from '@/components/ui/button';
+import { NativeNavigationLink } from '@/components/native-navigation-link';
 
 export default function NotFound() {
   return (
@@ -13,7 +12,9 @@ export default function NotFound() {
       <Button
         className="gold-button"
         nativeButton={false}
-        render={<Link href="/" prefetch={false} />}
+        render={
+          <NativeNavigationLink href="/" aria-label="Return to Scout Board" />
+        }
       >
         Return to Scout Board
       </Button>

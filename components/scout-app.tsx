@@ -45,9 +45,9 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 
 import { ScoutCrest, RuneDivider } from '@/components/brand';
+import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -777,7 +777,12 @@ export function ScoutApp({
                     variant="outline"
                     size="icon"
                     nativeButton={false}
-                    render={<Link href="/alerts" prefetch={false} />}
+                    render={
+                      <NativeNavigationLink
+                        href="/alerts"
+                        aria-label="View alerts"
+                      />
+                    }
                   />
                 }
               >
@@ -894,18 +899,17 @@ export function ScoutApp({
 
 function BrandBlock() {
   return (
-    <Link
+    <NativeNavigationLink
       className="brand-block"
       href="/"
       aria-label="TCG Scout home"
-      prefetch={false}
     >
       <ScoutCrest />
       <div>
         <strong>TCG SCOUT</strong>
         <small>Market intelligence</small>
       </div>
-    </Link>
+    </NativeNavigationLink>
   );
 }
 
@@ -918,11 +922,10 @@ function NavLink({
 }) {
   const Icon = item.icon;
   return (
-    <Link
+    <NativeNavigationLink
       className={cn('guild-link', active && 'active')}
       href={item.href}
       aria-current={active ? 'page' : undefined}
-      prefetch={false}
     >
       <span className="nav-medallion">
         <Icon />
@@ -932,7 +935,7 @@ function NavLink({
         <small>{item.subtitle}</small>
       </span>
       {active && <span className="active-rune" aria-hidden="true" />}
-    </Link>
+    </NativeNavigationLink>
   );
 }
 
@@ -949,7 +952,7 @@ function Account({
     <Tooltip>
       <TooltipTrigger
         render={
-          <a
+          <NativeNavigationLink
             className="account-chip"
             href={user ? signOutPath : signInPath}
             target="_top"
@@ -984,18 +987,17 @@ function MobileBottomNav({ active }: { active: Section }) {
       {items.map((item) => {
         const Icon = item.icon;
         return (
-          <Link
+          <NativeNavigationLink
             className={cn(
               active === item.section && 'active',
               item.section === 'scanner' && 'scan-action',
             )}
             href={item.href}
             key={item.section}
-            prefetch={false}
           >
             <Icon />
             <span>{item.label.split(' ')[0]}</span>
-          </Link>
+          </NativeNavigationLink>
         );
       })}
     </nav>
@@ -1230,9 +1232,9 @@ function Dashboard({
             title="Best Hunts Today"
             subtitle="Ranked by conservative profit, executability and confidence"
             action={
-              <Link className="text-link" href="/deals" prefetch={false}>
+              <NativeNavigationLink className="text-link" href="/deals">
                 View bounty board <ArrowRight />
-              </Link>
+              </NativeNavigationLink>
             }
           />
           <div className="deal-grid">
@@ -1320,13 +1322,12 @@ function Dashboard({
                 records[2] && recheckingIds.has(records[2].id),
               )}
             />
-            <Link
+            <NativeNavigationLink
               className="text-link block-link"
               href="/watchlist"
-              prefetch={false}
             >
               Open Watchtower <ArrowRight />
-            </Link>
+            </NativeNavigationLink>
           </Panel>
         </div>
       </div>
@@ -1337,9 +1338,9 @@ function Dashboard({
             title="Release Watch"
             subtitle="Official events and clearly marked community signals"
             action={
-              <Link className="text-link" href="/releases" prefetch={false}>
+              <NativeNavigationLink className="text-link" href="/releases">
                 Open codex <ArrowRight />
-              </Link>
+              </NativeNavigationLink>
             }
           />
           <div className="release-grid">

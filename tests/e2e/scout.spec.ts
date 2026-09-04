@@ -22,7 +22,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('primary navigation loads every product surface', async ({ page }) => {
+  await page.context().clearCookies();
   await open(page, '/');
+  await expect(page.getByLabel('Sign in with ChatGPT')).toBeVisible();
   const paths = [
     '/deals',
     '/lot-lab',
@@ -38,8 +40,16 @@ test('primary navigation loads every product surface', async ({ page }) => {
     '/settings',
   ];
   for (const path of paths) {
-    const response = await open(page, path);
-    expect(response?.status(), path).toBe(200);
+    const link = page.locator(
+      `nav[aria-label="Primary navigation"] a[href="${path}"]`,
+    );
+    await expect(link, path).toBeVisible();
+    await link.click();
+    await page.waitForURL(path);
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-scout-hydrated',
+      'true',
+    );
     await expect(page.locator('main.main-content')).toBeVisible();
   }
 });
