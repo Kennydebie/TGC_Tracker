@@ -13,6 +13,7 @@ import {
   listingAvailabilityAfterMisses,
   marktplaatsScanIntervalMinutes,
   parseMarktplaatsSearchHtml,
+  parseMarktplaatsStructuredData,
   priceChange,
 } from '../lib/marktplaats.ts';
 
@@ -87,6 +88,18 @@ void test('parses normal, multiple, missing and sponsored result fixtures', asyn
       ?.sponsored,
     true,
   );
+});
+
+void test('parses embedded structured listing data before semantic fallback', async () => {
+  const listings = parseMarktplaatsStructuredData(
+    await fixture('structured-data'),
+    'pokemon 151 booster bundle',
+  );
+  assert.equal(listings.length, 1);
+  assert.equal(listings[0]?.sourceListingId, 'm1234567999');
+  assert.equal(listings[0]?.price, 49.95);
+  assert.equal(listings[0]?.location, 'Maastricht');
+  assert.equal(listings[0]?.seller, 'Publieke verkoper');
 });
 
 void test('recognises parser changes, empty pages and challenges', async () => {

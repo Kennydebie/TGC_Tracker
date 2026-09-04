@@ -334,7 +334,106 @@ export function parseMarktplaatsPrice(value: string | null) {
   return Number.isFinite(price) && price >= 0 ? price : null;
 }
 
-export function parseMarktplaatsSearchHtml(
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function firstRecord(value: unknown) {
+  if (Array.isArray(value)) return value.map(recordValue).find(Boolean) ?? null;
+  return recordValue(value);
+}
+
+function firstImage(value: unknown): string | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (typeof candidate === 'string') return candidate;
+  return stringValue(recordValue(candidate)?.url);
+}
+
+export function parseMarktplaatsStructuredData(
+  html: string,
+  query: string,
+  limit = MARKTPLAATS_MAX_RESULTS_PER_QUERY,
+) {
+  const listings: MarktplaatsParsedListing[] = [];
+  const seen = new Set<string>();
+  const scripts = html.matchAll(
+    /<script\b[^>]*\btype=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  );
+  const visit = (value: unknown) => {
+    if (listings.length >= Math.min(limit, MARKTPLAATS_MAX_RESULTS_PER_QUERY))
+      return;
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    const item = recordValue(value);
+    if (!item) return;
+    const rawUrl = stringValue(item.url);
+    const title = stringValue(item.name) ?? stringValue(item.headline);
+    if (rawUrl && title) {
+      const sourceListingUrl = new URL(rawUrl, 'https://www.marktplaats.nl')
+        .href;
+      const sourceListingId = extractMarktplaatsListingId(sourceListingUrl);
+      if (
+        sourceListingId &&
+        !seen.has(sourceListingId) &&
+        isAllowedMarktplaatsListingUrl(sourceListingUrl)
+      ) {
+        const offer = firstRecord(item.offers);
+        const priceValue =
+          offer?.price ?? firstRecord(offer?.priceSpecification)?.price ?? null;
+        const locationSource =
+          firstRecord(item.availableAtOrFrom) ??
+          firstRecord(offer?.availableAtOrFrom);
+        const address = firstRecord(locationSource?.address);
+        const seller = firstRecord(offer?.seller) ?? firstRecord(item.seller);
+        const structuredPrice = stringValue(priceValue);
+        const numericStructuredPrice = Number(structuredPrice);
+        seen.add(sourceListingId);
+        listings.push({
+          sourceListingId,
+          sourceListingUrl,
+          title,
+          price:
+            typeof priceValue === 'number'
+              ? priceValue
+              : Number.isFinite(numericStructuredPrice) &&
+                  numericStructuredPrice >= 0
+                ? numericStructuredPrice
+                : parseMarktplaatsPrice(structuredPrice),
+          location:
+            stringValue(address?.addressLocality) ??
+            stringValue(locationSource?.name),
+          seller: stringValue(seller?.name),
+          snippet: stringValue(item.description),
+          thumbnailUrl: firstImage(item.image),
+          listingTimestampText:
+            stringValue(item.datePosted) ?? stringValue(item.datePublished),
+          delivery: null,
+          sponsored: false,
+          foundByQueries: [query],
+        });
+      }
+    }
+    for (const child of Object.values(item)) visit(child);
+  };
+  for (const match of scripts) {
+    try {
+      visit(JSON.parse(match[1].trim()));
+    } catch {
+      // Invalid optional JSON-LD is ignored; semantic cards remain the fallback.
+    }
+  }
+  return listings;
+}
+
+function parseMarktplaatsSemanticHtml(
   html: string,
   query: string,
   limit = MARKTPLAATS_MAX_RESULTS_PER_QUERY,
@@ -409,6 +508,42 @@ export function parseMarktplaatsSearchHtml(
       break;
   }
   return listings;
+}
+
+export function parseMarktplaatsSearchHtml(
+  html: string,
+  query: string,
+  limit = MARKTPLAATS_MAX_RESULTS_PER_QUERY,
+) {
+  const blocked = detectMarktplaatsBlock(200, html);
+  if (blocked) throw blocked;
+  const maximum = Math.min(limit, MARKTPLAATS_MAX_RESULTS_PER_QUERY);
+  const structured = parseMarktplaatsStructuredData(html, query, maximum);
+  const semantic = parseMarktplaatsSemanticHtml(html, query, maximum);
+  const merged = new Map(
+    structured.map((listing) => [listing.sourceListingId, listing]),
+  );
+  for (const listing of semantic) {
+    const current = merged.get(listing.sourceListingId);
+    merged.set(
+      listing.sourceListingId,
+      current
+        ? {
+            ...listing,
+            ...current,
+            location: current.location ?? listing.location,
+            seller: current.seller ?? listing.seller,
+            snippet: current.snippet ?? listing.snippet,
+            thumbnailUrl: current.thumbnailUrl ?? listing.thumbnailUrl,
+            listingTimestampText:
+              current.listingTimestampText ?? listing.listingTimestampText,
+            delivery: current.delivery ?? listing.delivery,
+            sponsored: current.sponsored || listing.sponsored,
+          }
+        : listing,
+    );
+  }
+  return [...merged.values()].slice(0, maximum);
 }
 
 const dangerousPatterns: [RegExp, string][] = [
