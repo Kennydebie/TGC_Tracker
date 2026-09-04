@@ -13,7 +13,7 @@ export default function NotFound() {
       <Button
         className="gold-button"
         nativeButton={false}
-        render={<Link href="/" />}
+        render={<Link href="/" prefetch={false} />}
       >
         Return to Scout Board
       </Button>

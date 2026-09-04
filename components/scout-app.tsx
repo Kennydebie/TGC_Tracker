@@ -205,6 +205,7 @@ function verificationLabel(item: Deal) {
     : checked.toLocaleString('nl-NL', {
         dateStyle: 'medium',
         timeStyle: 'short',
+        timeZone: 'Europe/Amsterdam',
       });
   return `${status} · checked ${checkedLabel}`;
 }
@@ -776,7 +777,7 @@ export function ScoutApp({
                     variant="outline"
                     size="icon"
                     nativeButton={false}
-                    render={<Link href="/alerts" />}
+                    render={<Link href="/alerts" prefetch={false} />}
                   />
                 }
               >
@@ -893,7 +894,12 @@ export function ScoutApp({
 
 function BrandBlock() {
   return (
-    <Link className="brand-block" href="/" aria-label="TCG Scout home">
+    <Link
+      className="brand-block"
+      href="/"
+      aria-label="TCG Scout home"
+      prefetch={false}
+    >
       <ScoutCrest />
       <div>
         <strong>TCG SCOUT</strong>
@@ -916,6 +922,7 @@ function NavLink({
       className={cn('guild-link', active && 'active')}
       href={item.href}
       aria-current={active ? 'page' : undefined}
+      prefetch={false}
     >
       <span className="nav-medallion">
         <Icon />
@@ -984,6 +991,7 @@ function MobileBottomNav({ active }: { active: Section }) {
             )}
             href={item.href}
             key={item.section}
+            prefetch={false}
           >
             <Icon />
             <span>{item.label.split(' ')[0]}</span>
@@ -1222,7 +1230,7 @@ function Dashboard({
             title="Best Hunts Today"
             subtitle="Ranked by conservative profit, executability and confidence"
             action={
-              <Link className="text-link" href="/deals">
+              <Link className="text-link" href="/deals" prefetch={false}>
                 View bounty board <ArrowRight />
               </Link>
             }
@@ -1312,7 +1320,11 @@ function Dashboard({
                 records[2] && recheckingIds.has(records[2].id),
               )}
             />
-            <Link className="text-link block-link" href="/watchlist">
+            <Link
+              className="text-link block-link"
+              href="/watchlist"
+              prefetch={false}
+            >
               Open Watchtower <ArrowRight />
             </Link>
           </Panel>
@@ -1325,7 +1337,7 @@ function Dashboard({
             title="Release Watch"
             subtitle="Official events and clearly marked community signals"
             action={
-              <Link className="text-link" href="/releases">
+              <Link className="text-link" href="/releases" prefetch={false}>
                 Open codex <ArrowRight />
               </Link>
             }
@@ -4416,7 +4428,9 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
                   · {sourceResults[source.id].status} ·{' '}
                   {new Date(
                     sourceResults[source.id].checkedAt,
-                  ).toLocaleTimeString('nl-NL')}
+                  ).toLocaleTimeString('nl-NL', {
+                    timeZone: 'Europe/Amsterdam',
+                  })}
                 </span>
               </output>
             ) : null}
