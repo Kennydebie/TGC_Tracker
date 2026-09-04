@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TCG Scout handoff</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="crest">◈</div>
+        <div><strong>TCG Scout</strong><span>Safe purchase handoff</span></div>
+      </header>
+      <label
+        >Signed handoff token<textarea
+          id="token"
+          rows="5"
+          placeholder="Paste the short-lived token from TCG Scout"
+        ></textarea>
+      </label>
+      <button id="validate">Validate intent</button>
+      <section id="result" hidden aria-live="polite"></section>
+      <p class="warning">
+        This extension can open or focus an allowlisted listing. It never places
+        bids, accepts offers, submits an order or sends payment.
+      </p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

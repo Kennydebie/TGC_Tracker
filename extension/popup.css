@@ -1,0 +1,76 @@
+:root {
+  color-scheme: dark;
+  font: 14px system-ui;
+  background: #0b0e0c;
+  color: #e8ddc2;
+}
+body {
+  width: 340px;
+  margin: 0;
+}
+main {
+  padding: 14px;
+  background: linear-gradient(145deg, #20231f, #0e1210);
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #6a5030;
+}
+.crest {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #c99a43;
+  color: #e4bd65;
+  transform: rotate(45deg);
+}
+header div:last-child {
+  display: flex;
+  flex-direction: column;
+}
+header span {
+  color: #a79b83;
+  font-size: 11px;
+}
+label {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+  color: #bcae91;
+  font-size: 12px;
+}
+textarea {
+  resize: vertical;
+  border: 1px solid #5c4930;
+  background: #121613;
+  color: #e8ddc2;
+  padding: 8px;
+}
+button {
+  width: 100%;
+  border: 1px solid #e4bd65;
+  background: linear-gradient(#d5a749, #956427);
+  color: #18120a;
+  padding: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+section {
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #4f754e;
+  background: #14261d;
+  font-size: 12px;
+}
+.warning {
+  margin-bottom: 0;
+  padding-top: 10px;
+  border-top: 1px solid #4d3d2a;
+  color: #aa9f89;
+  font-size: 11px;
+  line-height: 1.45;
+}

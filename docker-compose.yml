@@ -1,0 +1,7 @@
+services:
+  tcg-scout:
+    build: .
+    ports:
+      - '8787:8787'
+    env_file:
+      - .env.local
