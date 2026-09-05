@@ -114,6 +114,8 @@ No connector credentials are committed. Missing configuration is reported in the
 - `POST /api/scans/run`
 - `GET /api/amazon` plus Amazon watch and Shadow Mode actions
 - `GET /api/community` plus authorized Reddit and Discord ingestion routes
+- Owner-only integration credential management under `/api/integrations/scout-mcp/credentials`
+- Narrow bridge endpoints at `/api/integrations/scout-mcp/state` and `/api/integrations/scout-mcp/findings`
 - `GET` and `POST /api/ebay/marketplace-account-deletion`
 - `GET /api/shadow`
 - `GET /api/portfolio/summary`
@@ -169,3 +171,6 @@ The next highest-value step is to accumulate traceable production observations a
 
 Discord setup, server permissions, and the Cloudflare/Docker listener options:
 [Connection guide](docs/discord-connection.md).
+
+The authenticated bridge used by ChatGPT research tasks is documented in
+[Cloudflare MCP bridge operations](docs/scout-mcp-bridge.md).

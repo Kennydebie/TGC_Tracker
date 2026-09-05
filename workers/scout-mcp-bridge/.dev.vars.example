@@ -1,0 +1,9 @@
+# GitHub OAuth App credentials for local development. Never commit real values.
+GITHUB_CLIENT_ID=replace-with-github-oauth-client-id
+GITHUB_CLIENT_SECRET=replace-with-github-oauth-client-secret
+
+# At least 32 random bytes encoded as hex or base64.
+COOKIE_ENCRYPTION_KEY=replace-with-at-least-32-random-bytes
+
+# Plaintext token generated through TCG Scout's authenticated owner workflow.
+TCG_SCOUT_INTEGRATION_TOKEN=replace-with-tcs_int-token

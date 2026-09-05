@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-dry-run/
+.wrangler-final-dry-run/
+.wrangler/
+*.log
+.dev.vars
+.env
+.env.*
+!.env.example

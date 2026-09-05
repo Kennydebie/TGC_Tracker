@@ -24,6 +24,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import { DiscordConnection } from '@/components/discord-connection';
+import { ScoutIntegrationCredentials } from '@/components/scout-integration-credentials';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -395,6 +396,8 @@ export function CommunityRadar({
           Connect your bot and check whether real messages are arriving.
         </span>
       </div>
+
+      {dashboard.admin ? <ScoutIntegrationCredentials /> : null}
 
       {notice ? (
         <output className="community-notice" aria-live="polite">

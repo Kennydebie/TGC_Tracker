@@ -3,6 +3,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
+import { emptyCommunityDashboard } from '../lib/community.ts';
+
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(
@@ -61,4 +63,54 @@ void test('fictional datasets live only under test fixtures', async () => {
   );
   assert.match(identityCleanup, /Prismatic Evolutions Elite Trainer Box['"],/);
   assert.doesNotMatch(identityCleanup, /Elite Trainer Box\s*[×x]\s*2/i);
+});
+
+void test('owner credential UI uses the fixed Community Scout binding', async () => {
+  const source = await readFile(
+    path.resolve('components/scout-integration-credentials.tsx'),
+    'utf8',
+  );
+  assert.match(source, /const CHATGPT_OAUTH_SUBJECT = 'github:56995940';/);
+  assert.match(
+    source,
+    /const CHATGPT_SCOPES = \['scout:read', 'scout:write'\] as const;/,
+  );
+  assert.match(source, /oauthSubject: CHATGPT_OAUTH_SUBJECT/);
+  assert.match(source, /scopes: \[\.\.\.CHATGPT_SCOPES\]/);
+  assert.match(source, /method: 'POST'/);
+  assert.match(source, /method: 'DELETE'/);
+});
+
+void test('one-time integration token is memory-only and owner-gated', async () => {
+  const [source, radar, route] = await Promise.all([
+    readFile(
+      path.resolve('components/scout-integration-credentials.tsx'),
+      'utf8',
+    ),
+    readFile(path.resolve('components/community-radar.tsx'), 'utf8'),
+    readFile(path.resolve('app/api/community/route.ts'), 'utf8'),
+  ]);
+  assert.doesNotMatch(
+    source,
+    /localStorage|sessionStorage|URLSearchParams|console\.(?:log|info|debug|warn)/,
+  );
+  assert.match(source, /navigator\.clipboard\.writeText\(oneTimeToken\)/);
+  assert.match(source, /value=\{oneTimeToken\}/);
+  assert.ok(
+    (source.match(/setOneTimeToken\(null\)/g) ?? []).length >= 2,
+    'token must be cleared both when the dialog closes and when dismissed',
+  );
+  assert.match(source, /cannot be shown again/i);
+  assert.match(source, /if \(!nextOpen && creating\)/);
+  assert.match(source, /showCloseButton=\{!creating\}/);
+  assert.match(
+    radar,
+    /dashboard\.admin \? <ScoutIntegrationCredentials \/> : null/,
+  );
+  assert.equal(emptyCommunityDashboard().admin, false);
+  assert.match(
+    route,
+    /const admin = isCommunityAdmin\(request, env\.COMMUNITY_ADMIN_EMAIL\)/,
+  );
+  assert.match(route, /data\.admin = true/);
 });

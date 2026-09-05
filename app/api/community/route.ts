@@ -20,6 +20,7 @@ export async function GET(request: Request) {
     : { findings: [], importStatus: null };
   if (!admin) {
     const data = emptyCommunityDashboard({
+      admin: false,
       reddit: {
         connected: false,
         status: 'owner_sign_in_required',
@@ -53,6 +54,7 @@ export async function GET(request: Request) {
       env.DISCORD_CHANNEL_ALLOWLIST?.trim(),
     ),
   });
+  data.admin = true;
   const connection = await discordSetup(db, env);
   data.discord = {
     connected: connection.connected,

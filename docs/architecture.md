@@ -29,3 +29,9 @@ The deployable web application is itself a Cloudflare Worker through `@openai/si
 ## Security boundaries
 
 Authentication is server-owned. Source secrets are environment values and never props or browser data. Connector endpoints are fixed or allowlisted. Cart intents are short-lived and domain-bound. No feature can submit final checkout or payment.
+
+The ChatGPT research integration is deliberately separate from the Sites-native
+MCP route. ChatGPT authenticates to a dedicated Cloudflare OAuth Worker, and the
+Worker uses a revocable, account-bound integration credential on two fixed Site
+API routes. TCG Scout resolves the account from the stored credential; callers
+cannot select a user with request data or trusted-dispatcher headers.

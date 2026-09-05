@@ -4,6 +4,7 @@ import type { RequestUser } from '../server/user.ts';
 import {
   deriveScoutRunStatus,
   hashScoutValue,
+  sanitizeScoutSourceCheck,
   sanitizeScoutFinding,
   SCOUT_COLLECTION_METHOD,
   SCOUT_TRACKED_SOURCES,
@@ -39,6 +40,10 @@ type PreparedFinding = {
   dedupeKey: string;
   materialHash: string;
 };
+
+type PreparedStatement = ReturnType<D1Database['prepare']>;
+
+const SCOUT_RUN_LEASE_MS = 5 * 60_000;
 
 function changed(result: D1Result<unknown>): boolean {
   return Number(result.meta?.changes ?? 0) > 0;
@@ -139,7 +144,34 @@ async function replayOrConflict(
   if (stored.payload_hash !== payloadHash)
     throw new ScoutRunConflictError(externalRunId);
   const result = parseStoredResult(stored.result_json);
+  if (result?.errors.some((error) => error.code === 'persistence_failed'))
+    return null;
   return result ? { ...result, replayed: true } : null;
+}
+
+function isRetryablePersistenceFailure(stored: StoredRun): boolean {
+  return Boolean(
+    parseStoredResult(stored.result_json)?.errors.some(
+      (error) => error.code === 'persistence_failed',
+    ),
+  );
+}
+
+async function claimStoredRun(
+  db: D1Database,
+  stored: StoredRun,
+  userId: string,
+  now: number,
+): Promise<boolean> {
+  const claimed = await db
+    .prepare(
+      `UPDATE scout_ingestion_runs
+       SET result_json = '{}', updated_at = ?
+       WHERE id = ? AND user_id = ? AND result_json = ? AND updated_at = ?`,
+    )
+    .bind(now, stored.id, userId, stored.result_json, stored.updated_at)
+    .run();
+  return changed(claimed);
 }
 
 function findingValues(
@@ -191,20 +223,20 @@ function findingValues(
   ] as const;
 }
 
-async function insertObservation(
+async function prepareObservation(
   db: D1Database,
   entry: PreparedFinding,
   userId: string,
   findingId: string,
   runId: string,
   now: number,
-) {
+): Promise<PreparedStatement> {
   const idHash = await hashScoutValue({
     userId,
     findingId,
     materialHash: entry.materialHash,
   });
-  await db
+  return db
     .prepare(
       `INSERT INTO scout_finding_observations
         (id, user_id, finding_id, run_id, material_hash, observed_at,
@@ -224,18 +256,21 @@ async function insertObservation(
       JSON.stringify(entry.finding),
       now,
       now,
-    )
-    .run();
+    );
 }
 
-async function persistFinding(
+async function prepareFindingMutation(
   db: D1Database,
   entry: PreparedFinding,
   userId: string,
   runId: string,
   now: number,
-): Promise<{ id: string; outcome: 'inserted' | 'updated' | 'unchanged' }> {
-  let stored = await db
+): Promise<{
+  id: string;
+  outcome: 'inserted' | 'updated' | 'unchanged';
+  statements: PreparedStatement[];
+}> {
+  const stored = await db
     .prepare(
       `SELECT id, material_hash, last_observed_at
        FROM scout_findings
@@ -250,7 +285,7 @@ async function persistFinding(
   const findingId =
     stored?.id ?? `scout-finding:${userFindingHash.slice(0, 40)}`;
   if (!stored) {
-    const result = await db
+    const insert = db
       .prepare(
         `INSERT INTO scout_findings
           (id, user_id, dedupe_key, source_kind, source_identifier, game,
@@ -265,38 +300,47 @@ async function persistFinding(
          VALUES (${Array.from({ length: 33 }, () => '?').join(', ')})
          ON CONFLICT(user_id, dedupe_key) DO NOTHING`,
       )
-      .bind(...findingValues(entry, userId, findingId, runId, now))
-      .run();
-    if (changed(result)) {
-      await insertObservation(db, entry, userId, findingId, runId, now);
-      return { id: findingId, outcome: 'inserted' };
-    }
-    stored = await db
-      .prepare(
-        `SELECT id, material_hash, last_observed_at
-         FROM scout_findings
-         WHERE user_id = ? AND dedupe_key = ?`,
-      )
-      .bind(userId, entry.dedupeKey)
-      .first<StoredFinding>();
-    if (!stored) throw new Error('Unable to resolve concurrent finding write.');
+      .bind(...findingValues(entry, userId, findingId, runId, now));
+    return {
+      id: findingId,
+      outcome: 'inserted',
+      statements: [
+        insert,
+        await prepareObservation(db, entry, userId, findingId, runId, now),
+      ],
+    };
   }
   const observedAt = Date.parse(entry.finding.observedAt);
   if (stored.material_hash === entry.materialHash) {
-    await db
+    const update = db
       .prepare(
         `UPDATE scout_findings
          SET last_observed_at = MAX(last_observed_at, ?),
-             latest_run_id = ?, updated_at = ?
+             latest_run_id = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE latest_run_id END,
+             updated_at = ?
          WHERE id = ? AND user_id = ?`,
       )
-      .bind(observedAt, runId, now, stored.id, userId)
-      .run();
-    await insertObservation(db, entry, userId, stored.id, runId, now);
-    return { id: stored.id, outcome: 'unchanged' };
+      .bind(observedAt, observedAt, runId, now, stored.id, userId);
+    return {
+      id: stored.id,
+      outcome: 'unchanged',
+      statements: [
+        update,
+        await prepareObservation(db, entry, userId, stored.id, runId, now),
+      ],
+    };
   }
+  if (observedAt < stored.last_observed_at)
+    return {
+      id: stored.id,
+      outcome: 'unchanged',
+      statements: [
+        await prepareObservation(db, entry, userId, stored.id, runId, now),
+      ],
+    };
   const finding = entry.finding;
-  await db
+  const update = db
     .prepare(
       `UPDATE scout_findings SET
          source_kind = ?, source_identifier = ?, game = ?, product_name = ?,
@@ -309,7 +353,7 @@ async function persistFinding(
          verification_evidence_url = ?, verification_observed_at = ?,
          verification_evidence_json = ?, material_hash = ?, latest_run_id = ?,
          updated_at = ?
-       WHERE id = ? AND user_id = ?`,
+       WHERE id = ? AND user_id = ? AND ? >= last_observed_at`,
     )
     .bind(
       finding.sourceKind,
@@ -344,10 +388,16 @@ async function persistFinding(
       now,
       stored.id,
       userId,
-    )
-    .run();
-  await insertObservation(db, entry, userId, stored.id, runId, now);
-  return { id: stored.id, outcome: 'updated' };
+      observedAt,
+    );
+  return {
+    id: stored.id,
+    outcome: 'updated',
+    statements: [
+      update,
+      await prepareObservation(db, entry, userId, stored.id, runId, now),
+    ],
+  };
 }
 
 export async function saveScoutFindings(
@@ -356,7 +406,14 @@ export async function saveScoutFindings(
   rawInput: unknown,
   now = Date.now(),
 ): Promise<SaveScoutFindingsResult> {
-  const input = validateScoutImportInput(rawInput);
+  const validated = validateScoutImportInput(rawInput, now);
+  const input: SaveScoutFindingsInput = {
+    ...validated,
+    run: {
+      ...validated.run,
+      sourceChecks: validated.run.sourceChecks.map(sanitizeScoutSourceCheck),
+    },
+  };
   const entries = await prepareFindings(input.findings);
   const { accepted, errors } = businessValidate(entries, input);
   const status = deriveScoutRunStatus(input.run.sourceChecks, errors.length);
@@ -377,8 +434,23 @@ export async function saveScoutFindings(
   if (existing) {
     const replay = await replayOrConflict(existing, input.run.id, payloadHash);
     if (replay) return replay;
-    if (now - Number(existing.updated_at) < 5 * 60_000)
+    const retryableFailure = isRetryablePersistenceFailure(existing);
+    const leaseExpired =
+      now - Number(existing.updated_at) >= SCOUT_RUN_LEASE_MS;
+    if (!retryableFailure && !leaseExpired)
       throw new Error('This run is still being processed; retry shortly.');
+    if (!(await claimStoredRun(db, existing, user.id, now))) {
+      const raced = await findStoredRun(db, user.id, input.run.id);
+      if (raced) {
+        const racedReplay = await replayOrConflict(
+          raced,
+          input.run.id,
+          payloadHash,
+        );
+        if (racedReplay) return racedReplay;
+      }
+      throw new Error('This run is already being retried; retry shortly.');
+    }
   }
   const runHash = await hashScoutValue({
     userId: user.id,
@@ -418,29 +490,6 @@ export async function saveScoutFindings(
       if (replay) return replay;
       throw new Error('This run is already being processed; retry shortly.');
     }
-    await db.batch(
-      input.run.sourceChecks.map((check) =>
-        db
-          .prepare(
-            `INSERT INTO scout_ingestion_source_checks
-              (id, user_id, run_id, source_identifier, status, checked_at,
-               coverage_through, error_code, detail, data_mode, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'production', ?)`,
-          )
-          .bind(
-            `${runId}:source:${input.run.sourceChecks.indexOf(check)}`,
-            user.id,
-            runId,
-            check.sourceIdentifier,
-            check.status,
-            Date.parse(check.checkedAt),
-            check.coverageThrough ? Date.parse(check.coverageThrough) : null,
-            check.errorCode,
-            check.detail,
-            now,
-          ),
-      ),
-    );
   }
   const result: SaveScoutFindingsResult = {
     runId: input.run.id,
@@ -454,64 +503,100 @@ export async function saveScoutFindings(
     errors,
   };
   try {
+    const statements: PreparedStatement[] = input.run.sourceChecks.map(
+      (check, index) =>
+        db
+          .prepare(
+            `INSERT INTO scout_ingestion_source_checks
+              (id, user_id, run_id, source_identifier, status, checked_at,
+               coverage_through, error_code, detail, data_mode, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'production', ?)
+             ON CONFLICT(user_id, run_id, source_identifier) DO NOTHING`,
+          )
+          .bind(
+            `${runId}:source:${index}`,
+            user.id,
+            runId,
+            check.sourceIdentifier,
+            check.status,
+            Date.parse(check.checkedAt),
+            check.coverageThrough ? Date.parse(check.coverageThrough) : null,
+            check.errorCode,
+            check.detail,
+            now,
+          ),
+    );
     for (const entry of accepted) {
-      const persisted = await persistFinding(db, entry, user.id, runId, now);
-      result[persisted.outcome] += 1;
-      result.recordIds.push(persisted.id);
+      const mutation = await prepareFindingMutation(
+        db,
+        entry,
+        user.id,
+        runId,
+        now,
+      );
+      result[mutation.outcome] += 1;
+      result.recordIds.push(mutation.id);
+      statements.push(...mutation.statements);
     }
-    await db
-      .prepare(
-        `UPDATE scout_ingestion_runs SET
-           status = ?, inserted_count = ?, updated_count = ?,
-           unchanged_count = ?, rejected_count = ?, errors_json = ?,
-           result_json = ?, updated_at = ?
-         WHERE id = ? AND user_id = ?`,
-      )
-      .bind(
-        result.status,
-        result.inserted,
-        result.updated,
-        result.unchanged,
-        result.rejected,
-        JSON.stringify(result.errors),
-        JSON.stringify(result),
-        now,
-        runId,
-        user.id,
-      )
-      .run();
-    await db
-      .prepare(
-        `INSERT INTO audit_logs
-          (id, user_id, action, target_type, target_id, metadata_json, created_at)
-         VALUES (?, ?, 'scout_findings_imported', 'scout_ingestion_run', ?, ?, ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        user.id,
-        runId,
-        JSON.stringify({
-          status: result.status,
-          inserted: result.inserted,
-          updated: result.updated,
-          unchanged: result.unchanged,
-          rejected: result.rejected,
-          collectionMethod: SCOUT_COLLECTION_METHOD,
-        }),
-        now,
-      )
-      .run();
+    statements.push(
+      db
+        .prepare(
+          `UPDATE scout_ingestion_runs SET
+             status = ?, inserted_count = ?, updated_count = ?,
+             unchanged_count = ?, rejected_count = ?, errors_json = ?,
+             result_json = ?, updated_at = ?
+           WHERE id = ? AND user_id = ?`,
+        )
+        .bind(
+          result.status,
+          result.inserted,
+          result.updated,
+          result.unchanged,
+          result.rejected,
+          JSON.stringify(result.errors),
+          JSON.stringify(result),
+          now,
+          runId,
+          user.id,
+        ),
+      db
+        .prepare(
+          `INSERT INTO audit_logs
+            (id, user_id, action, target_type, target_id, metadata_json, created_at)
+           VALUES (?, ?, 'scout_findings_imported', 'scout_ingestion_run', ?, ?, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          user.id,
+          runId,
+          JSON.stringify({
+            status: result.status,
+            inserted: result.inserted,
+            updated: result.updated,
+            unchanged: result.unchanged,
+            rejected: result.rejected,
+            collectionMethod: SCOUT_COLLECTION_METHOD,
+          }),
+          now,
+        ),
+    );
+    await db.batch(statements);
     return result;
   } catch (error) {
     const failure: ScoutImportError = {
       index: null,
       code: 'persistence_failed',
       path: '',
-      message: 'The import could not be completed. Retry with a new run ID.',
+      message:
+        'The import could not be completed. Retry with the same run ID and identical input.',
     };
     result.status = 'failed';
-    result.errors.push(failure);
-    result.rejected += accepted.length - result.recordIds.length;
+    result.inserted = 0;
+    result.updated = 0;
+    result.unchanged = 0;
+    result.recordIds = [];
+    result.errors = [...errors, failure];
+    result.rejected = errors.length + accepted.length;
     await db
       .prepare(
         `UPDATE scout_ingestion_runs SET status = 'failed', inserted_count = ?,

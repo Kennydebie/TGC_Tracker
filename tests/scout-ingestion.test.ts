@@ -5,7 +5,9 @@ import {
   canonicalizeScoutUrl,
   deriveScoutRunStatus,
   hashScoutValue,
+  sanitizeScoutSourceCheck,
   sanitizeScoutFinding,
+  ScoutIngestionValidationError,
   scoutFindingIdentity,
   validateScoutImportInput,
   type SaveScoutFindingsInput,
@@ -58,6 +60,19 @@ function input(): SaveScoutFindingsInput {
   };
 }
 
+function validationIssues(
+  value: SaveScoutFindingsInput,
+  now: number,
+): Array<{ code: string; path: string }> {
+  try {
+    validateScoutImportInput(value, now);
+    assert.fail('Expected scout ingestion validation to fail.');
+  } catch (error) {
+    assert.ok(error instanceof ScoutIngestionValidationError);
+    return error.issues;
+  }
+}
+
 void test('validation preserves explicitly unknown facts and defaults the collection method', () => {
   const raw = input();
   delete (raw.findings[0] as Partial<(typeof raw.findings)[number]>)
@@ -107,6 +122,102 @@ void test('validation bounds batches and requires unique source checks with orde
   invalidRun.run.finishedAt = '2026-09-05T19:59:00Z';
   invalidRun.run.sourceChecks.push({ ...invalidRun.run.sourceChecks[0] });
   assert.throws(() => validateScoutImportInput(invalidRun));
+});
+
+void test('validation bounds run, source, finding, publication, and verification timestamps', () => {
+  const now = Date.parse('2026-09-05T20:05:00Z');
+
+  const futureRun = input();
+  futureRun.run.startedAt = '2026-09-05T20:16:00Z';
+  futureRun.run.finishedAt = '2026-09-05T20:16:00Z';
+  futureRun.run.sourceChecks[0].checkedAt = '2026-09-05T20:16:00Z';
+  futureRun.run.sourceChecks[0].coverageThrough = '2026-09-05T20:16:00Z';
+  futureRun.findings[0].observedAt = '2026-09-05T20:16:00Z';
+  assert.ok(
+    validationIssues(futureRun, now).some(
+      (issue) =>
+        issue.path === 'run.finishedAt' && issue.code === 'future_timestamp',
+    ),
+  );
+
+  const overlongRun = input();
+  overlongRun.run.startedAt = '2026-09-04T19:59:00Z';
+  assert.ok(
+    validationIssues(overlongRun, now).some(
+      (issue) =>
+        issue.path === 'run.finishedAt' && issue.code === 'run_too_long',
+    ),
+  );
+
+  const earlyCheck = input();
+  earlyCheck.run.sourceChecks[0].checkedAt = '2026-09-05T19:40:00Z';
+  earlyCheck.run.sourceChecks[0].coverageThrough = '2026-09-05T19:40:00Z';
+  assert.ok(
+    validationIssues(earlyCheck, now).some(
+      (issue) =>
+        issue.path === 'run.sourceChecks.0.checkedAt' &&
+        issue.code === 'timestamp_outside_run',
+    ),
+  );
+
+  const futureCoverage = input();
+  futureCoverage.run.sourceChecks[0].coverageThrough = '2026-09-05T20:13:00Z';
+  assert.ok(
+    validationIssues(futureCoverage, now).some(
+      (issue) =>
+        issue.path === 'run.sourceChecks.0.coverageThrough' &&
+        issue.code === 'future_coverage',
+    ),
+  );
+
+  const earlyFinding = input();
+  earlyFinding.findings[0].observedAt = '2026-09-05T19:40:00Z';
+  assert.ok(
+    validationIssues(earlyFinding, now).some(
+      (issue) =>
+        issue.path === 'findings.0.observedAt' &&
+        issue.code === 'timestamp_outside_run',
+    ),
+  );
+
+  const futurePublication = input();
+  futurePublication.findings[0].publishedAt = '2026-09-05T20:13:00Z';
+  assert.ok(
+    validationIssues(futurePublication, now).some(
+      (issue) =>
+        issue.path === 'findings.0.publishedAt' &&
+        issue.code === 'future_publication',
+    ),
+  );
+
+  const earlyVerification = input();
+  earlyVerification.findings[0].verificationStatus = 'retailer_checked';
+  earlyVerification.findings[0].verificationEvidence = {
+    url: 'https://shop.example/items/test',
+    observedAt: '2026-09-05T19:40:00Z',
+    note: null,
+  };
+  assert.ok(
+    validationIssues(earlyVerification, now).some(
+      (issue) =>
+        issue.path === 'findings.0.verificationEvidence.observedAt' &&
+        issue.code === 'timestamp_outside_run',
+    ),
+  );
+});
+
+void test('source check sanitation normalizes control characters and redacts personal data', () => {
+  const sanitized = sanitizeScoutSourceCheck({
+    ...input().run.sourceChecks[0],
+    errorCode: '\u0000 upstream_error \n admin@example.test ',
+    detail: ' Contact admin@example.test\n or +31 6 1234 5678 for access. ',
+  });
+  assert.equal(sanitized.errorCode, 'upstream_error [redacted email]');
+  assert.doesNotMatch(sanitized.detail ?? '', /admin@example\.test/);
+  assert.doesNotMatch(sanitized.detail ?? '', /1234 5678/);
+  assert.match(sanitized.detail ?? '', /\[redacted email\]/);
+  assert.match(sanitized.detail ?? '', /\[redacted phone\]/);
+  assert.doesNotMatch(sanitized.detail ?? '', /[\r\n]/);
 });
 
 void test('canonical URLs drop tracking fragments while distinct sellers keep distinct identities', async () => {

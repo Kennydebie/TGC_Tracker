@@ -24,6 +24,14 @@
     "community:discord:cloudflare:dev": "npm --prefix workers/discord-gateway run dev",
     "community:discord:cloudflare:check": "npm --prefix workers/discord-gateway run check",
     "community:discord:cloudflare:deploy": "npm --prefix workers/discord-gateway run deploy",
+    "scout:mcp:cloudflare:install": "npm --prefix workers/scout-mcp-bridge ci",
+    "scout:mcp:cloudflare:format": "npm --prefix workers/scout-mcp-bridge run format",
+    "scout:mcp:cloudflare:format:check": "npm --prefix workers/scout-mcp-bridge run format:check",
+    "scout:mcp:cloudflare:lint": "npm --prefix workers/scout-mcp-bridge run lint",
+    "scout:mcp:cloudflare:typecheck": "npm --prefix workers/scout-mcp-bridge run typecheck",
+    "scout:mcp:cloudflare:test": "npm --prefix workers/scout-mcp-bridge test",
+    "scout:mcp:cloudflare:check": "npm --prefix workers/scout-mcp-bridge run check",
+    "scout:mcp:cloudflare:deploy": "npm --prefix workers/scout-mcp-bridge run deploy",
     "extension:build": "node scripts/build-extension.mjs"
   },
   "dependencies": {

@@ -13,6 +13,11 @@ import type { RequestUser } from '../../lib/server/user.ts';
 
 type SqlValue = string | number | null;
 
+type BatchFailure = {
+  call: number;
+  afterStatements: number;
+};
+
 const userA: RequestUser = {
   id: 'user-a',
   email: 'a@example.test',
@@ -36,7 +41,9 @@ function applyMigrations(database: DatabaseSync) {
   database.exec('PRAGMA foreign_keys = ON');
 }
 
-function asD1(database: DatabaseSync) {
+function asD1(database: DatabaseSync, batchFailure?: BatchFailure) {
+  let batchCalls = 0;
+  let failureInjected = false;
   const result = {
     prepare(sql: string) {
       let bindings: SqlValue[] = [];
@@ -69,10 +76,21 @@ function asD1(database: DatabaseSync) {
       return prepared;
     },
     async batch(statements: Array<{ run(): Promise<unknown> }>) {
+      batchCalls += 1;
       database.exec('BEGIN');
       try {
         const results = [];
-        for (const statement of statements) results.push(await statement.run());
+        for (const statement of statements) {
+          if (
+            !failureInjected &&
+            batchFailure?.call === batchCalls &&
+            results.length === batchFailure.afterStatements
+          ) {
+            failureInjected = true;
+            throw new Error('Injected D1 batch failure.');
+          }
+          results.push(await statement.run());
+        }
         database.exec('COMMIT');
         return results;
       } catch (error) {
@@ -82,6 +100,10 @@ function asD1(database: DatabaseSync) {
     },
   };
   return result as unknown as D1Database;
+}
+
+function after(isoTimestamp: string, milliseconds = 60_000): number {
+  return Date.parse(isoTimestamp) + milliseconds;
 }
 
 function payload(
@@ -154,7 +176,12 @@ void test('imports are retry-safe, update material facts, and preserve seller id
   const db = asD1(sqlite);
   try {
     const firstInput = payload('run:first');
-    const first = await saveScoutFindings(db, userA, firstInput, 1_000);
+    const first = await saveScoutFindings(
+      db,
+      userA,
+      firstInput,
+      after(firstInput.run.finishedAt),
+    );
     assert.deepEqual(
       {
         status: first.status,
@@ -164,28 +191,37 @@ void test('imports are retry-safe, update material facts, and preserve seller id
       },
       { status: 'completed', inserted: 1, updated: 0, unchanged: 0 },
     );
-    const replay = await saveScoutFindings(db, userA, firstInput, 2_000);
+    const replay = await saveScoutFindings(
+      db,
+      userA,
+      firstInput,
+      after(firstInput.run.finishedAt, 120_000),
+    );
     assert.equal(replay.replayed, true);
     assert.equal(count(sqlite, 'scout_findings'), 1);
 
+    const unchangedInput = payload('run:unchanged', {
+      observedAt: '2026-09-05T21:00:00Z',
+    });
     const unchanged = await saveScoutFindings(
       db,
       userA,
-      payload('run:unchanged', { observedAt: '2026-09-05T21:00:00Z' }),
-      3_000,
+      unchangedInput,
+      after(unchangedInput.run.finishedAt),
     );
     assert.equal(unchanged.unchanged, 1);
     assert.equal(count(sqlite, 'scout_finding_observations'), 1);
 
+    const updatedInput = payload('run:updated', {
+      observedAt: '2026-09-05T22:00:00Z',
+      price: 39.95,
+      availability: 'in_stock',
+    });
     const updated = await saveScoutFindings(
       db,
       userA,
-      payload('run:updated', {
-        observedAt: '2026-09-05T22:00:00Z',
-        price: 39.95,
-        availability: 'in_stock',
-      }),
-      4_000,
+      updatedInput,
+      after(updatedInput.run.finishedAt),
     );
     assert.equal(updated.updated, 1);
     assert.equal(count(sqlite, 'scout_findings'), 1);
@@ -202,7 +238,12 @@ void test('imports are retry-safe, update material facts, and preserve seller id
       observedAt: '2026-09-05T23:00:00Z',
       retailerName: 'Test Seller Beta',
     });
-    const distinct = await saveScoutFindings(db, userA, seller, 5_000);
+    const distinct = await saveScoutFindings(
+      db,
+      userA,
+      seller,
+      after(seller.run.finishedAt),
+    );
     assert.equal(distinct.inserted, 1);
     assert.equal(count(sqlite, 'scout_findings'), 2);
   } finally {
@@ -215,8 +256,14 @@ void test('all reads and uniqueness constraints are isolated to the authenticate
   applyMigrations(sqlite);
   const db = asD1(sqlite);
   try {
-    await saveScoutFindings(db, userA, payload('run:shared'), 1_000);
-    await saveScoutFindings(db, userB, payload('run:shared'), 2_000);
+    const shared = payload('run:shared');
+    await saveScoutFindings(db, userA, shared, after(shared.run.finishedAt));
+    await saveScoutFindings(
+      db,
+      userB,
+      shared,
+      after(shared.run.finishedAt, 120_000),
+    );
     assert.equal(count(sqlite, 'scout_findings'), 2);
 
     const stateA = await getScoutIngestionState(db, userA);
@@ -245,12 +292,8 @@ void test('unknown values remain null in Community Radar', async () => {
   applyMigrations(sqlite);
   const db = asD1(sqlite);
   try {
-    await saveScoutFindings(
-      db,
-      userA,
-      payload('run:unknown', { price: null }),
-      1_000,
-    );
+    const unknown = payload('run:unknown', { price: null });
+    await saveScoutFindings(db, userA, unknown, after(unknown.run.finishedAt));
     const dashboard = await listScoutResearchDashboard(db, userA);
     assert.equal(dashboard.findings[0].price, null);
     assert.equal(dashboard.findings[0].currency, null);
@@ -289,7 +332,7 @@ void test('empty completed runs advance coverage while partial and failed runs d
       db,
       userA,
       emptyRun('run:empty-completed', completedAt, [checked]),
-      1_000,
+      after(completedAt),
     );
     assert.equal(completed.status, 'completed');
     assert.equal(completed.inserted, 0);
@@ -309,7 +352,7 @@ void test('empty completed runs advance coverage while partial and failed runs d
           detail: 'The current megathread could not be opened.',
         },
       ]),
-      2_000,
+      after(partialAt),
     );
     assert.equal(partial.status, 'partial');
     let state = await getScoutIngestionState(db, userA);
@@ -334,7 +377,7 @@ void test('empty completed runs advance coverage while partial and failed runs d
           detail: 'Source lookup failed.',
         },
       ]),
-      3_000,
+      after(failedAt),
     );
     assert.equal(failed.status, 'failed');
     state = await getScoutIngestionState(db, userA);
@@ -343,6 +386,189 @@ void test('empty completed runs advance coverage while partial and failed runs d
       new Date(completedAt).toISOString(),
     );
     assert.equal(state.lastRunStatus, 'failed');
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('failed final batches roll back atomically and retry with the same run ID', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite, { call: 1, afterStatements: 2 });
+  const retryInput = payload('run:retry-after-persistence-failure');
+  const firstAttemptAt = after(retryInput.run.finishedAt);
+  try {
+    await assert.rejects(
+      saveScoutFindings(db, userA, retryInput, firstAttemptAt),
+      /Injected D1 batch failure/,
+    );
+    assert.equal(count(sqlite, 'scout_ingestion_runs'), 1);
+    assert.equal(count(sqlite, 'scout_ingestion_source_checks'), 0);
+    assert.equal(count(sqlite, 'scout_findings'), 0);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 0);
+    assert.equal(count(sqlite, 'audit_logs'), 0);
+    const failedRun = sqlite
+      .prepare(
+        `SELECT status, result_json
+         FROM scout_ingestion_runs
+         WHERE user_id = ? AND external_run_id = ?`,
+      )
+      .get(userA.id, retryInput.run.id);
+    assert.equal(failedRun?.status, 'failed');
+    assert.match(String(failedRun?.result_json), /persistence_failed/);
+
+    const retried = await saveScoutFindings(
+      db,
+      userA,
+      retryInput,
+      firstAttemptAt + 1_000,
+    );
+    assert.equal(retried.status, 'completed');
+    assert.equal(retried.replayed, false);
+    assert.equal(retried.inserted, 1);
+    assert.equal(retried.rejected, 0);
+    assert.equal(count(sqlite, 'scout_ingestion_runs'), 1);
+    assert.equal(count(sqlite, 'scout_ingestion_source_checks'), 1);
+    assert.equal(count(sqlite, 'scout_findings'), 1);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+    assert.equal(count(sqlite, 'audit_logs'), 1);
+
+    const replayed = await saveScoutFindings(
+      db,
+      userA,
+      retryInput,
+      firstAttemptAt + 2_000,
+    );
+    assert.equal(replayed.replayed, true);
+    assert.equal(count(sqlite, 'scout_findings'), 1);
+    assert.equal(count(sqlite, 'audit_logs'), 1);
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('stale empty-result run leases are reclaimed without reopening recent work', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  const staleInput = payload('run:stale-processing-lease');
+  const initialAttemptAt = after(staleInput.run.finishedAt);
+  try {
+    await saveScoutFindings(db, userA, staleInput, initialAttemptAt);
+    sqlite
+      .prepare(
+        `UPDATE scout_ingestion_runs
+         SET result_json = '{}', updated_at = ?
+         WHERE user_id = ? AND external_run_id = ?`,
+      )
+      .run(initialAttemptAt, userA.id, staleInput.run.id);
+
+    await assert.rejects(
+      saveScoutFindings(db, userA, staleInput, initialAttemptAt + 60_000),
+      /still being processed/,
+    );
+
+    sqlite
+      .prepare(
+        `UPDATE scout_ingestion_runs SET updated_at = ?
+         WHERE user_id = ? AND external_run_id = ?`,
+      )
+      .run(initialAttemptAt - 5 * 60_000 - 1, userA.id, staleInput.run.id);
+    const reclaimed = await saveScoutFindings(
+      db,
+      userA,
+      staleInput,
+      initialAttemptAt + 60_000,
+    );
+    assert.equal(reclaimed.replayed, false);
+    assert.equal(reclaimed.status, 'completed');
+    assert.equal(reclaimed.unchanged, 1);
+    assert.equal(count(sqlite, 'scout_ingestion_runs'), 1);
+    assert.equal(count(sqlite, 'scout_findings'), 1);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+
+    const replayed = await saveScoutFindings(
+      db,
+      userA,
+      staleInput,
+      initialAttemptAt + 120_000,
+    );
+    assert.equal(replayed.replayed, true);
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('late older observations are retained without overwriting current facts', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  const newer = payload('run:newer-facts', {
+    observedAt: '2026-09-05T22:00:00Z',
+    price: 39.95,
+    availability: 'in_stock',
+  });
+  const older = payload('run:late-older-facts', {
+    observedAt: '2026-09-05T21:00:00Z',
+    price: 89.95,
+    availability: 'sold_out',
+  });
+  try {
+    await saveScoutFindings(db, userA, newer, after(newer.run.finishedAt));
+    const before = sqlite
+      .prepare(
+        `SELECT price_cents, availability, material_hash, latest_run_id,
+                last_observed_at
+         FROM scout_findings WHERE user_id = ?`,
+      )
+      .get(userA.id);
+
+    const staleResult = await saveScoutFindings(
+      db,
+      userA,
+      older,
+      after(newer.run.finishedAt, 120_000),
+    );
+    assert.equal(staleResult.updated, 0);
+    assert.equal(staleResult.unchanged, 1);
+    const afterStale = sqlite
+      .prepare(
+        `SELECT price_cents, availability, material_hash, latest_run_id,
+                last_observed_at
+         FROM scout_findings WHERE user_id = ?`,
+      )
+      .get(userA.id);
+    assert.deepEqual(afterStale, before);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 2);
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('source check diagnostic text is sanitized before persistence and reads', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  const sanitizedInput = payload('run:sanitized-source-check');
+  sanitizedInput.run.sourceChecks[0].errorCode =
+    '\u0000 upstream_error \n admin@example.test ';
+  sanitizedInput.run.sourceChecks[0].detail =
+    ' Contact admin@example.test\n or +31 6 1234 5678 for access. ';
+  try {
+    await saveScoutFindings(
+      db,
+      userA,
+      sanitizedInput,
+      after(sanitizedInput.run.finishedAt),
+    );
+    const state = await getScoutIngestionState(db, userA);
+    const sourceCheck = state.recentRuns[0]?.sourceChecks[0];
+    assert.equal(sourceCheck?.errorCode, 'upstream_error [redacted email]');
+    assert.doesNotMatch(sourceCheck?.detail ?? '', /admin@example\.test/);
+    assert.doesNotMatch(sourceCheck?.detail ?? '', /1234 5678/);
+    assert.match(sourceCheck?.detail ?? '', /\[redacted email\]/);
+    assert.match(sourceCheck?.detail ?? '', /\[redacted phone\]/);
+    assert.doesNotMatch(sourceCheck?.detail ?? '', /[\r\n]/);
   } finally {
     sqlite.close();
   }

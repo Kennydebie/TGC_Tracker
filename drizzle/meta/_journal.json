@@ -71,6 +71,13 @@
       "when": 1788642000000,
       "tag": "0009_chatgpt_web_research_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788646500000,
+      "tag": "0010_scout_integration_credentials",
+      "breakpoints": true
     }
   ]
 }

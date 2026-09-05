@@ -31,7 +31,9 @@
     "coverage/**",
     "components/ui/**",
     "hooks/**",
-    "next-env.d.ts"
+    "next-env.d.ts",
+    "workers/discord-gateway/**",
+    "workers/scout-mcp-bridge/**"
   ],
   "rules": {
     "no-array-constructor": "error",

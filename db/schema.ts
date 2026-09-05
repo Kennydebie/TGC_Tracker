@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   real,
@@ -22,6 +23,58 @@ export const users = sqliteTable(
     ...timestamps,
   },
   (table) => [uniqueIndex('idx_users_email').on(table.email)],
+);
+
+export const scoutIntegrationCredentials = sqliteTable(
+  'scout_integration_credentials',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    tokenId: text('token_id').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    oauthSubject: text('oauth_subject').notNull(),
+    scopesJson: text('scopes_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('idx_scout_integration_token_id').on(table.tokenId),
+    uniqueIndex('idx_scout_integration_token_hash').on(table.tokenHash),
+    index('idx_scout_integration_user_created').on(
+      table.userId,
+      table.createdAt,
+    ),
+    check(
+      'scout_integration_label_length',
+      sql`length(trim(${table.label})) BETWEEN 1 AND 100`,
+    ),
+    check(
+      'scout_integration_token_id_format',
+      sql`length(${table.tokenId}) BETWEEN 20 AND 64 AND ${table.tokenId} NOT GLOB '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      'scout_integration_token_hash_format',
+      sql`length(${table.tokenHash}) = 64 AND ${table.tokenHash} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      'scout_integration_oauth_subject_format',
+      sql`length(${table.oauthSubject}) BETWEEN 8 AND 27 AND ${table.oauthSubject} GLOB 'github:[1-9]*' AND substr(${table.oauthSubject}, 8) NOT GLOB '*[^0-9]*'`,
+    ),
+    check(
+      'scout_integration_scopes_json',
+      sql`${table.scopesJson} IN ('["scout:read"]', '["scout:write"]', '["scout:read","scout:write"]')`,
+    ),
+    check(
+      'scout_integration_expiry_after_creation',
+      sql`${table.expiresAt} IS NULL OR ${table.expiresAt} > ${table.createdAt}`,
+    ),
+  ],
 );
 
 export const userSettings = sqliteTable('user_settings', {

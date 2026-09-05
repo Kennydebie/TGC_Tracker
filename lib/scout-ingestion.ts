@@ -4,6 +4,8 @@ import { normaliseCommunityText, redactPersonalData } from './community.ts';
 
 export const SCOUT_COLLECTION_METHOD = 'chatgpt_web_research' as const;
 export const SCOUT_MAX_BATCH_SIZE = 25;
+export const SCOUT_MAX_CLOCK_SKEW_MS = 10 * 60_000;
+export const SCOUT_MAX_RUN_DURATION_MS = 24 * 60 * 60_000;
 export const SCOUT_TRACKED_SOURCES = [
   {
     sourceIdentifier: 'reddit:r/PokemonTCGNL',
@@ -277,20 +279,142 @@ export class ScoutRunConflictError extends Error {
 
 export function validateScoutImportInput(
   input: unknown,
+  now = Date.now(),
 ): SaveScoutFindingsInput {
   const parsed = saveScoutFindingsInputSchema.safeParse(input);
-  if (parsed.success) return parsed.data;
-  throw new ScoutIngestionValidationError(
-    parsed.error.issues.map((issue) => ({
-      index:
-        issue.path[0] === 'findings' && typeof issue.path[1] === 'number'
-          ? issue.path[1]
-          : null,
-      code: issue.code,
-      path: issue.path.join('.'),
-      message: issue.message,
-    })),
-  );
+  if (!parsed.success)
+    throw new ScoutIngestionValidationError(
+      parsed.error.issues.map((issue) => ({
+        index:
+          issue.path[0] === 'findings' && typeof issue.path[1] === 'number'
+            ? issue.path[1]
+            : null,
+        code: issue.code,
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    );
+  const temporalIssues: ScoutImportError[] = [];
+  const startedAt = Date.parse(parsed.data.run.startedAt);
+  const finishedAt = Date.parse(parsed.data.run.finishedAt);
+  const earliestRunEvent = startedAt - SCOUT_MAX_CLOCK_SKEW_MS;
+  const latestRunEvent = finishedAt + SCOUT_MAX_CLOCK_SKEW_MS;
+  const latestAllowedEvent = now + SCOUT_MAX_CLOCK_SKEW_MS;
+  if (finishedAt - startedAt > SCOUT_MAX_RUN_DURATION_MS)
+    temporalIssues.push({
+      index: null,
+      code: 'run_too_long',
+      path: 'run.finishedAt',
+      message: 'A research run cannot span more than 24 hours.',
+    });
+  if (finishedAt > now + SCOUT_MAX_CLOCK_SKEW_MS)
+    temporalIssues.push({
+      index: null,
+      code: 'future_timestamp',
+      path: 'run.finishedAt',
+      message: 'Run timestamps cannot be more than 10 minutes in the future.',
+    });
+  parsed.data.run.sourceChecks.forEach((check, index) => {
+    const checkedAt = Date.parse(check.checkedAt);
+    if (checkedAt > latestAllowedEvent)
+      temporalIssues.push({
+        index: null,
+        code: 'future_timestamp',
+        path: `run.sourceChecks.${index}.checkedAt`,
+        message:
+          'Source check time cannot be more than 10 minutes in the future.',
+      });
+    else if (checkedAt < earliestRunEvent || checkedAt > latestRunEvent)
+      temporalIssues.push({
+        index: null,
+        code: 'timestamp_outside_run',
+        path: `run.sourceChecks.${index}.checkedAt`,
+        message: 'Source check time must correspond to this research run.',
+      });
+    if (
+      check.coverageThrough &&
+      (Date.parse(check.coverageThrough) >
+        checkedAt + SCOUT_MAX_CLOCK_SKEW_MS ||
+        Date.parse(check.coverageThrough) > latestAllowedEvent)
+    )
+      temporalIssues.push({
+        index: null,
+        code: 'future_coverage',
+        path: `run.sourceChecks.${index}.coverageThrough`,
+        message: 'Source coverage cannot extend beyond the check time.',
+      });
+  });
+  parsed.data.findings.forEach((finding, index) => {
+    const observedAt = Date.parse(finding.observedAt);
+    if (observedAt > latestAllowedEvent)
+      temporalIssues.push({
+        index,
+        code: 'future_timestamp',
+        path: `findings.${index}.observedAt`,
+        message:
+          'Finding observation time cannot be more than 10 minutes in the future.',
+      });
+    else if (observedAt < earliestRunEvent || observedAt > latestRunEvent)
+      temporalIssues.push({
+        index,
+        code: 'timestamp_outside_run',
+        path: `findings.${index}.observedAt`,
+        message:
+          'Finding observation time must correspond to this research run.',
+      });
+    if (
+      finding.publishedAt &&
+      (Date.parse(finding.publishedAt) > observedAt + SCOUT_MAX_CLOCK_SKEW_MS ||
+        Date.parse(finding.publishedAt) > latestAllowedEvent)
+    )
+      temporalIssues.push({
+        index,
+        code: 'future_publication',
+        path: `findings.${index}.publishedAt`,
+        message: 'Publication time cannot be after the observation time.',
+      });
+    if (finding.verificationEvidence) {
+      const verifiedAt = Date.parse(finding.verificationEvidence.observedAt);
+      if (verifiedAt > latestAllowedEvent)
+        temporalIssues.push({
+          index,
+          code: 'future_verification',
+          path: `findings.${index}.verificationEvidence.observedAt`,
+          message:
+            'Verification time cannot be more than 10 minutes in the future.',
+        });
+      else if (verifiedAt < earliestRunEvent || verifiedAt > latestRunEvent)
+        temporalIssues.push({
+          index,
+          code: 'timestamp_outside_run',
+          path: `findings.${index}.verificationEvidence.observedAt`,
+          message: 'Verification time must correspond to this research run.',
+        });
+    }
+  });
+  if (temporalIssues.length)
+    throw new ScoutIngestionValidationError(temporalIssues);
+  return parsed.data;
+}
+
+export function sanitizeScoutSourceCheck(
+  sourceCheck: ScoutSourceCheck,
+): ScoutSourceCheck {
+  return {
+    ...sourceCheck,
+    errorCode: sourceCheck.errorCode
+      ? redactPersonalData(normaliseCommunityText(sourceCheck.errorCode)).slice(
+          0,
+          100,
+        )
+      : null,
+    detail: sourceCheck.detail
+      ? redactPersonalData(normaliseCommunityText(sourceCheck.detail)).slice(
+          0,
+          500,
+        )
+      : null,
+  };
 }
 
 export function sanitizeScoutFinding(

@@ -5480,6 +5480,198 @@ body::after {
   flex-wrap: wrap;
   font-size: 0.95rem;
 }
+
+.scout-integration-entry {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+  gap: 1rem;
+  margin: -0.4rem 0 1rem;
+}
+
+.scout-integration-entry > span {
+  color: var(--muted-parchment);
+}
+
+.scout-integration-dialog {
+  max-height: 90dvh;
+  max-width: 780px;
+  overflow-y: auto;
+  width: min(94vw, 780px);
+}
+
+.scout-integration-binding {
+  align-items: center;
+  background: rgb(111 214 207 / 7%);
+  border: 1px solid rgb(111 214 207 / 24%);
+  border-radius: 0.7rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.8rem;
+}
+
+.scout-integration-binding > svg {
+  color: var(--community-cyan);
+  height: 1.3rem;
+  width: 1.3rem;
+}
+
+.scout-integration-binding > div:not(.scout-integration-scopes) {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scout-integration-binding code,
+.scout-integration-list code {
+  color: var(--community-cyan);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.scout-integration-scopes,
+.scout-integration-actions,
+.scout-integration-secret > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.scout-integration-actions small {
+  color: var(--muted-parchment);
+}
+
+.scout-integration-secret {
+  background: rgb(228 185 95 / 8%);
+  border: 1px solid rgb(228 185 95 / 42%);
+  border-radius: 0.7rem;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.9rem;
+}
+
+.scout-integration-secret header {
+  align-items: start;
+  display: flex;
+  gap: 0.65rem;
+}
+
+.scout-integration-secret header > svg {
+  color: var(--community-gold);
+  flex: 0 0 auto;
+}
+
+.scout-integration-secret p {
+  color: var(--muted-parchment);
+  line-height: 1.5;
+  margin: 0.3rem 0 0;
+}
+
+.scout-integration-secret input {
+  background: #0b100f;
+  border: 1px solid #6b5533;
+  border-radius: 0.45rem;
+  color: var(--foreground);
+  font-family: var(--font-geist-mono), monospace;
+  min-height: 2.7rem;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.scout-integration-error {
+  border-color: rgb(230 124 133 / 45%);
+  color: #f3b0b6;
+}
+
+.scout-integration-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.scout-integration-list > header,
+.scout-integration-list article > header {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.scout-integration-list > header span,
+.scout-integration-list dt {
+  color: var(--community-gold);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scout-integration-list > header h3 {
+  font-size: 0.95rem;
+  margin: 0.15rem 0 0;
+}
+
+.scout-integration-list > header small,
+.scout-integration-list dd {
+  color: var(--muted-parchment);
+}
+
+.scout-integration-list article {
+  background: rgb(7 12 11 / 62%);
+  border: 1px solid #493b2b;
+  border-radius: 0.65rem;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.8rem;
+}
+
+.scout-integration-list article > header > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scout-integration-list dl {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.scout-integration-list dl > div {
+  background: rgb(255 255 255 / 2%);
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: 0.4rem;
+  padding: 0.5rem;
+}
+
+.scout-integration-list dd {
+  font-size: 0.72rem;
+  margin: 0.18rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.scout-integration-list article > button {
+  justify-self: end;
+}
+
+@media (max-width: 560px) {
+  .scout-integration-binding {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .scout-integration-scopes {
+    grid-column: 1 / -1;
+  }
+
+  .scout-integration-list dl {
+    grid-template-columns: 1fr;
+  }
+
+  .scout-integration-secret > div > button {
+    flex: 1 1 auto;
+  }
+}
+
 .discord-connect-dialog {
   width: min(94vw, 760px);
   max-width: 760px;

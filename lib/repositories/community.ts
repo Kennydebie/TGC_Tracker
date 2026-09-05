@@ -422,6 +422,7 @@ export async function listCommunityDashboard(
   return {
     generatedAt: new Date().toISOString(),
     dataMode: 'production',
+    admin: false,
     reddit: {
       connected: redditRun?.status === 'success',
       status:

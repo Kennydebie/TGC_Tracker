@@ -258,6 +258,7 @@ export type ScoutResearchImportStatus = {
 export type CommunityDashboard = {
   generatedAt: string;
   dataMode: CommunityDataMode;
+  admin: boolean;
   reddit: { connected: boolean; status: string; detail: string };
   discord: { connected: boolean; status: string; detail: string };
   metrics: {
@@ -287,6 +288,7 @@ export type CommunityDashboard = {
 export function emptyCommunityDashboard(
   options: {
     generatedAt?: string;
+    admin?: boolean;
     reddit?: CommunityDashboard['reddit'];
     discord?: CommunityDashboard['discord'];
     sources?: CommunitySourceStatus[];
@@ -295,6 +297,7 @@ export function emptyCommunityDashboard(
   return {
     generatedAt: options.generatedAt ?? new Date().toISOString(),
     dataMode: 'production',
+    admin: options.admin ?? false,
     reddit: options.reddit ?? {
       connected: false,
       status: 'credentials_required',

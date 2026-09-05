@@ -21,3 +21,9 @@ jobs:
       - run: npm run test:integration
       - run: npm run extension:build
       - run: npm run build
+      - run: npm --prefix workers/scout-mcp-bridge ci
+      - run: npm --prefix workers/scout-mcp-bridge run format:check
+      - run: npm --prefix workers/scout-mcp-bridge run lint
+      - run: npm --prefix workers/scout-mcp-bridge run typecheck
+      - run: npm --prefix workers/scout-mcp-bridge test
+      - run: npm --prefix workers/scout-mcp-bridge run check
