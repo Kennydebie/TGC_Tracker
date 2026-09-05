@@ -1,0 +1,13 @@
+services:
+  discord-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.discord
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.discord
+    volumes:
+      - discord-state:/app/.discord-state
+volumes:
+  discord-state:

@@ -1382,6 +1382,15 @@ export const communityWatchRules = sqliteTable(
   ],
 );
 
+export const discordWorkerHealth = sqliteTable('discord_worker_health', {
+  id: text('id').primaryKey(),
+  status: text('status').notNull(),
+  detail: text('detail'),
+  updatedAt: integer('updated_at').notNull(),
+  lastMessageAt: integer('last_message_at'),
+  lastIngestAt: integer('last_ingest_at'),
+});
+
 export const communityShadowEvaluations = sqliteTable(
   'community_shadow_evaluations',
   {

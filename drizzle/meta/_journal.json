@@ -43,6 +43,13 @@
       "when": 1788603832926,
       "tag": "0005_blushing_bill_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788611914467,
+      "tag": "0006_overconfident_power_pack",
+      "breakpoints": true
     }
   ]
 }

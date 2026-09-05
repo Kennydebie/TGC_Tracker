@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { DiscordConnection } from '@/components/discord-connection';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -104,6 +105,7 @@ export function CommunityRadar({
   signInPath: string;
   userSignedIn: boolean;
 }) {
+  const [refreshKey, setRefreshKey] = useState(0);
   const [dashboard, setDashboard] = useState<CommunityDashboard | null>(null);
   const [selected, setSelected] = useState<CommunityProductRadar | null>(null);
   const [notice, setNotice] = useState('');
@@ -152,7 +154,15 @@ export function CommunityRadar({
     return () => {
       cancelled = true;
     };
-  }, [initialEventId]);
+  }, [initialEventId, refreshKey]);
+
+  useEffect(() => {
+    const timer = setInterval(
+      () => setRefreshKey((value) => value + 1),
+      30_000,
+    );
+    return () => clearInterval(timer);
+  }, []);
 
   const openProduct = (product: CommunityProductRadar) => {
     setDialogNotice('');
@@ -263,6 +273,7 @@ export function CommunityRadar({
       setCommunityId('');
       setChannelId('');
       setSourceFormOpen(false);
+      setRefreshKey((value) => value + 1);
     }
   };
 
@@ -348,6 +359,17 @@ export function CommunityRadar({
           />
         </div>
       </section>
+
+      <div className="discord-connect-entry">
+        <DiscordConnection
+          signedIn={userSignedIn}
+          signInPath={signInPath}
+          onRefresh={() => setRefreshKey((value) => value + 1)}
+        />
+        <span>
+          Connect your bot and check whether real messages are arriving.
+        </span>
+      </div>
 
       {notice ? (
         <output className="community-notice" aria-live="polite">
@@ -1274,7 +1296,7 @@ function SourceHealthSummary({
               ? (productionSources.find(
                   (source) => source.rateLimitRemaining !== null,
                 )?.rateLimitRemaining ?? 'unverified')
-              : connector.connected
+              : latest?.lastSignalAt
                 ? 'observed'
                 : 'unverified'}
           </dd>

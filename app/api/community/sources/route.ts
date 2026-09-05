@@ -1,3 +1,7 @@
+import { env } from 'cloudflare:workers';
+import { isCommunityAdmin } from '@/lib/discord-setup';
+import { rejectCrossSiteMutation } from '@/lib/security';
+import { communityFixtureDashboard } from '@/lib/fixtures-community';
 import { getD1 } from '@/db';
 import {
   listCommunityDashboard,
@@ -17,7 +21,9 @@ const CATEGORY_ALLOWLIST = new Set([
   'General',
 ]);
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isCommunityAdmin(request, env.COMMUNITY_ADMIN_EMAIL))
+    return Response.json({ data: communityFixtureDashboard().sources });
   const dashboard = await listCommunityDashboard(getD1(), {
     redditCredentialsAvailable: false,
     discordCredentialsAvailable: false,
@@ -26,6 +32,13 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const crossSite = rejectCrossSiteMutation(request);
+  if (crossSite) return crossSite;
+  if (!isCommunityAdmin(request, env.COMMUNITY_ADMIN_EMAIL))
+    return Response.json(
+      { error: 'Only the app owner can change shared community sources.' },
+      { status: 403 },
+    );
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   if (Number(request.headers.get('content-length') ?? 0) > 16_384)

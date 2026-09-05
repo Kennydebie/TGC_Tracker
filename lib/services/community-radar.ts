@@ -300,13 +300,13 @@ export async function processDiscordCommunityMessage(options: {
     errorDetail: null,
     signals: [signal],
   });
-  if (signal.canonicalProductId)
+  if (persisted.signalsCreated > 0 && signal.canonicalProductId)
     await recalculateCommunityMomentum(
       options.db,
       signal.canonicalProductId,
       now(),
     );
-  if (shouldTriggerMarketVerification(signal)) {
+  if (persisted.signalsCreated > 0 && shouldTriggerMarketVerification(signal)) {
     const verification = await verifyCommunitySignal(
       signal,
       options.env,

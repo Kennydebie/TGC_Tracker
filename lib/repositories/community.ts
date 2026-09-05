@@ -394,9 +394,10 @@ export async function listCommunityDashboard(
       officialReference: Boolean(row.official_reference),
       unresolved: Boolean(row.unresolved),
       textHash: stringValue(row.text_hash),
-      rawExcerpt: row.raw_excerpt
-        ? stringValue(row.raw_excerpt)
-        : 'Excerpt expired under the retention policy.',
+      rawExcerpt:
+        Number(row.raw_expires_at) >= Date.now() && row.raw_excerpt
+          ? stringValue(row.raw_excerpt)
+          : 'Excerpt expired under the retention policy.',
       rawExpiresAt: row.raw_expires_at
         ? new Date(Number(row.raw_expires_at)).toISOString()
         : new Date(0).toISOString(),
@@ -528,6 +529,7 @@ export async function persistCommunityScan(
   const signals = run.signals.slice(0, 500);
   const clusters = clusterCommunitySignals(signals);
   const statements: D1PreparedStatement[] = [];
+  const insertIndices: number[] = [];
 
   for (const signal of signals) {
     const sourceId = sourceIdFor(signal);
@@ -541,9 +543,8 @@ export async function persistCommunityScan(
              data_mode, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'connected', ?, 'production', ?, ?)
            ON CONFLICT(id) DO UPDATE SET
-             name = excluded.name,
              status = excluded.status,
-             last_signal_at = excluded.last_signal_at,
+             last_signal_at = MAX(COALESCE(last_signal_at, 0), excluded.last_signal_at),
              updated_at = excluded.updated_at`,
         )
         .bind(
@@ -583,6 +584,7 @@ export async function persistCommunityScan(
           ),
       );
     }
+    insertIndices.push(statements.length);
     statements.push(
       db
         .prepare(
@@ -669,14 +671,14 @@ export async function persistCommunityScan(
           )
           .bind(
             `review:${signal.id}`,
-            sourceId,
+            null,
             signal.price !== null || signal.signalType !== 'GENERAL_SENTIMENT'
               ? 'medium'
               : 'low',
             JSON.stringify({
               signalId: signal.id,
               signalType: signal.signalType,
-              excerpt: signal.rawExcerpt,
+              communitySourceId: sourceId,
               confidence: signal.confidence,
             }),
             now,
@@ -746,6 +748,19 @@ export async function persistCommunityScan(
           .bind(eventId, signal.id, now),
       );
     }
+    const joined = `FROM community_signals s JOIN community_event_signals es ON es.signal_id = s.id WHERE es.event_id = ?`;
+    statements.push(
+      db
+        .prepare(`UPDATE community_signal_events SET
+      mention_count = (SELECT COUNT(*) ${joined}),
+      unique_author_count = (SELECT COUNT(DISTINCT author_reliability_id) ${joined}),
+      unique_community_count = (SELECT COUNT(DISTINCT cs.external_community_id) FROM community_sources cs JOIN community_signals s ON s.source_id = cs.id JOIN community_event_signals es ON es.signal_id = s.id WHERE es.event_id = ?),
+      platforms_json = (SELECT json_group_array(DISTINCT platform) ${joined}),
+      source_ids_json = (SELECT json_group_array(DISTINCT source_id) ${joined}),
+      first_detected_at = (SELECT MIN(occurred_at) ${joined}),
+      last_detected_at = (SELECT MAX(occurred_at) ${joined}) WHERE id = ?`)
+        .bind(...Array(8).fill(eventId)),
+    );
   }
 
   statements.push(
@@ -776,11 +791,19 @@ export async function persistCommunityScan(
       ),
   );
 
+  let inserted = 0;
   if (statements.length) {
     for (let index = 0; index < statements.length; index += 80) {
-      await db.batch(statements.slice(index, index + 80));
+      const results = await db.batch(statements.slice(index, index + 80));
+      for (const [offset, result] of results.entries())
+        if (insertIndices.includes(index + offset))
+          inserted += Number(result.meta.changes ?? 0);
     }
   }
+  await db
+    .prepare('UPDATE community_scan_runs SET signals_created = ? WHERE id = ?')
+    .bind(inserted, run.id)
+    .run();
   await db
     .prepare(
       `UPDATE community_signals
@@ -790,7 +813,7 @@ export async function persistCommunityScan(
     .bind(now)
     .run();
   return {
-    signalsCreated: signals.length,
+    signalsCreated: inserted,
     duplicatesClustered: Math.max(0, signals.length - clusters.length),
     clustersCreated: clusters.length,
   };

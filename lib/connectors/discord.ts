@@ -216,7 +216,15 @@ export class DiscordConnector {
   }
 
   normaliseMessage(message: DiscordMessagePayload): DiscordMessageResult {
-    if (!message.id || !message.channel_id || !message.timestamp)
+    if (
+      !message ||
+      !message.id ||
+      !message.channel_id ||
+      !safeSnowflake(message.id) ||
+      !safeSnowflake(message.channel_id) ||
+      !message.timestamp ||
+      !Number.isFinite(Date.parse(message.timestamp))
+    )
       return { accepted: false, reason: 'invalid_payload' };
     if (!message.guild_id)
       return { accepted: false, reason: 'direct_message_ignored' };
@@ -310,9 +318,14 @@ type GatewayPayload = {
 export class DiscordGatewayService {
   private socket: WebSocket | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private firstHeartbeat: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sequence: number | null = null;
+  private sessionId: string | null = null;
+  private resumeUrl: string | null = null;
+  private acknowledged = true;
   private stopped = false;
+  private attempts = 0;
   private readonly connector: DiscordConnector;
   private readonly handlers: {
     onMessage: (message: DiscordMessagePayload) => Promise<void> | void;
@@ -338,38 +351,77 @@ export class DiscordGatewayService {
         'bot_required',
       );
     this.stopped = false;
-    const gateway = new URL(await this.connector.gatewayUrl());
-    gateway.searchParams.set('v', String(DISCORD_API_VERSION));
-    gateway.searchParams.set('encoding', 'json');
-    const factory =
-      this.connector.config.webSocketFactory ??
-      ((url: string) => new WebSocket(url));
-    this.socket = factory(gateway.toString());
-    this.socket.addEventListener('open', () =>
-      this.handlers.onStatus?.('connected'),
-    );
-    this.socket.addEventListener(
-      'message',
-      (event) => void this.handlePayload(String(event.data)),
-    );
-    this.socket.addEventListener('close', (event) => {
-      this.clearHeartbeat();
-      const permissionFailure = event.code === 4014;
-      this.handlers.onStatus?.(
-        permissionFailure ? 'permission_required' : 'disconnected',
-        permissionFailure
-          ? 'Discord MESSAGE_CONTENT intent is unavailable.'
-          : `Gateway closed with code ${event.code}.`,
+    await this.connect();
+  }
+
+  private async connect() {
+    try {
+      const gateway = new URL(
+        this.resumeUrl ?? (await this.connector.gatewayUrl()),
       );
-      if (!this.stopped && !permissionFailure) {
-        this.reconnectTimer = setTimeout(() => {
-          if (!this.stopped) void this.start();
-        }, 2_000);
-      }
-    });
-    this.socket.addEventListener('error', () =>
-      this.handlers.onStatus?.('error', 'Discord Gateway transport error.'),
-    );
+      if (this.stopped) return;
+      gateway.searchParams.set('v', String(DISCORD_API_VERSION));
+      gateway.searchParams.set('encoding', 'json');
+      const factory =
+        this.connector.config.webSocketFactory ??
+        ((url: string) => new WebSocket(url));
+      const socket = factory(gateway.toString());
+      this.socket = socket;
+      socket.addEventListener('message', (event) => {
+        if (this.socket !== socket || this.stopped) return;
+        void this.handlePayload(String(event.data)).catch(() =>
+          this.handlers.onStatus?.(
+            'delivery_error',
+            'Could not queue a Discord event.',
+          ),
+        );
+      });
+      socket.addEventListener('close', (event) => {
+        if (this.socket !== socket) return;
+        this.clearHeartbeat();
+        this.socket = null;
+        if (this.stopped) return;
+        const fatal = [4004, 4010, 4011, 4012, 4013, 4014].includes(event.code);
+        this.handlers.onStatus?.(
+          event.code === 4004
+            ? 'authentication_failed'
+            : fatal
+              ? 'permission_required'
+              : 'disconnected',
+          event.code === 4014
+            ? 'Enable Message Content Intent in the Discord Developer Portal.'
+            : `Gateway closed with code ${event.code}.`,
+        );
+        if ([4007, 4009].includes(event.code)) this.clearSession();
+        if (!fatal) this.reconnect();
+      });
+      socket.addEventListener('error', () => {
+        if (this.socket === socket) socket.close(4000, 'Transport error');
+      });
+    } catch (error) {
+      this.handlers.onStatus?.(
+        'disconnected',
+        'Gateway connection failed. Retrying.',
+      );
+      if (
+        !(
+          error instanceof DiscordConnectorError &&
+          error.classification === 'authentication_failed'
+        )
+      )
+        this.reconnect();
+    }
+  }
+
+  private reconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+    const delay =
+      Math.min(60_000, 2_000 * 2 ** Math.min(this.attempts++, 5)) +
+      Math.random() * 1_000;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.stopped) void this.connect();
+    }, delay);
   }
 
   stop() {
@@ -381,6 +433,12 @@ export class DiscordGatewayService {
     this.socket = null;
   }
 
+  private clearSession() {
+    this.sessionId = null;
+    this.resumeUrl = null;
+    this.sequence = null;
+  }
+
   private async handlePayload(raw: string) {
     let payload: GatewayPayload;
     try {
@@ -389,48 +447,94 @@ export class DiscordGatewayService {
       return;
     }
     if (typeof payload.s === 'number') this.sequence = payload.s;
+    if (payload.op === 11) {
+      this.acknowledged = true;
+      return;
+    }
+    if (payload.op === 1) {
+      this.send({ op: 1, d: this.sequence });
+      return;
+    }
     if (payload.op === 10) {
       const interval = Number(
-        (payload.d as { heartbeat_interval?: number } | null)
-          ?.heartbeat_interval,
+        (payload.d as { heartbeat_interval?: number })?.heartbeat_interval,
       );
       if (!Number.isFinite(interval) || interval < 1_000) return;
       this.clearHeartbeat();
-      this.heartbeat = setInterval(
-        () => this.send({ op: 1, d: this.sequence }),
-        interval,
+      this.acknowledged = true;
+      const beat = () => {
+        if (!this.acknowledged) {
+          this.socket?.close(4000, 'Heartbeat acknowledgement missing');
+          return;
+        }
+        this.acknowledged = false;
+        this.send({ op: 1, d: this.sequence });
+      };
+      this.firstHeartbeat = setTimeout(() => {
+        beat();
+        this.heartbeat = setInterval(beat, interval);
+      }, Math.random() * interval);
+      this.send(
+        this.sessionId
+          ? {
+              op: 6,
+              d: {
+                token: this.connector.config.botToken,
+                session_id: this.sessionId,
+                seq: this.sequence,
+              },
+            }
+          : {
+              op: 2,
+              d: {
+                token: this.connector.config.botToken,
+                intents:
+                  GUILDS_INTENT |
+                  GUILD_MESSAGES_INTENT |
+                  MESSAGE_CONTENT_INTENT,
+                properties: {
+                  os: 'linux',
+                  browser: 'tcg-scout',
+                  device: 'tcg-scout',
+                },
+              },
+            },
       );
-      this.send({
-        op: 2,
-        d: {
-          token: this.connector.config.botToken,
-          intents:
-            GUILDS_INTENT | GUILD_MESSAGES_INTENT | MESSAGE_CONTENT_INTENT,
-          properties: {
-            os: 'linux',
-            browser: 'tcg-scout',
-            device: 'tcg-scout',
-          },
-        },
-      });
       return;
     }
     if (payload.op === 7 || payload.op === 9) {
+      if (payload.op === 9 && payload.d !== true) this.clearSession();
       this.socket?.close(4000, 'Reconnect requested');
       return;
     }
-    if (payload.op === 0 && payload.t === 'MESSAGE_CREATE') {
-      await this.handlers.onMessage(payload.d as DiscordMessagePayload);
+    if (payload.op === 0 && payload.t === 'READY') {
+      const data = payload.d as {
+        session_id?: string;
+        resume_gateway_url?: string;
+      };
+      this.sessionId = data.session_id ?? null;
+      this.resumeUrl = data.resume_gateway_url?.startsWith('wss://')
+        ? data.resume_gateway_url
+        : null;
+      this.attempts = 0;
+      this.handlers.onStatus?.('connected', 'Discord Gateway READY received.');
     }
+    if (payload.op === 0 && payload.t === 'RESUMED') {
+      this.attempts = 0;
+      this.handlers.onStatus?.('connected', 'Discord session resumed.');
+    }
+    if (payload.op === 0 && payload.t === 'MESSAGE_CREATE')
+      await this.handlers.onMessage(payload.d as DiscordMessagePayload);
   }
 
   private send(payload: unknown) {
     if (this.socket?.readyState === WebSocket.OPEN)
       this.socket.send(JSON.stringify(payload));
   }
-
   private clearHeartbeat() {
+    if (this.firstHeartbeat) clearTimeout(this.firstHeartbeat);
     if (this.heartbeat) clearInterval(this.heartbeat);
+    this.firstHeartbeat = null;
     this.heartbeat = null;
   }
 }

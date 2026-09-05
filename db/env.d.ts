@@ -26,6 +26,7 @@ declare namespace Cloudflare {
     DISCORD_CHANNEL_ALLOWLIST?: string;
     DISCORD_INGEST_URL?: string;
     COMMUNITY_INGEST_SECRET?: string;
+    COMMUNITY_ADMIN_EMAIL?: string;
     COMMUNITY_AUTHOR_HASH_SALT?: string;
     COMMUNITY_RAW_RETENTION_HOURS?: string;
   }

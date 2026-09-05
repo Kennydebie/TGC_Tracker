@@ -5377,3 +5377,75 @@ body::after {
     flex: 1 1 auto;
   }
 }
+
+.discord-connect-entry {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1rem 0;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+}
+.discord-connect-dialog {
+  width: min(94vw, 760px);
+  max-width: 760px;
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+.discord-connect-steps {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 1.25rem;
+  font-size: 1rem;
+}
+.discord-connect-steps p {
+  margin: 0.5rem 0;
+  line-height: 1.6;
+}
+.discord-connect-steps a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--primary);
+  text-decoration: underline;
+}
+.discord-connect-steps small {
+  display: block;
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+.discord-checks {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+.discord-checks header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.discord-checks > div {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+.discord-checks svg {
+  flex-shrink: 0;
+}
+.discord-checks small {
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-top: 0.25rem;
+}
+.discord-checks dl {
+  font-size: 0.875rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+.discord-checks dd {
+  margin: 0;
+}

@@ -244,7 +244,7 @@ void test('Discord health uses the official bot REST identity endpoint', async (
 
 void test('Discord Gateway disconnect is surfaced to service health', async () => {
   class FakeSocket extends EventTarget {
-    readyState = WebSocket.OPEN;
+    readyState: number = WebSocket.OPEN;
     send() {}
     close() {}
   }
@@ -262,4 +262,71 @@ void test('Discord Gateway disconnect is surfaced to service health', async () =
   socket.dispatchEvent(new Event('close'));
   assert.deepEqual(statuses, ['disconnected']);
   service.stop();
+});
+
+void test('Discord waits for READY and resumes after a missed heartbeat ACK', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  context.mock.method(Math, 'random', () => 0);
+  class Socket extends EventTarget {
+    readyState: number = WebSocket.OPEN;
+    sent: Array<{ op: number; d: Record<string, unknown> }> = [];
+    send(raw: string) {
+      this.sent.push(JSON.parse(raw));
+    }
+    close(code = 1000) {
+      this.readyState = WebSocket.CLOSED;
+      this.dispatchEvent(Object.assign(new Event('close'), { code }));
+    }
+    emit(payload: unknown) {
+      this.dispatchEvent(
+        new MessageEvent('message', { data: JSON.stringify(payload) }),
+      );
+    }
+  }
+  const sockets: Socket[] = [],
+    statuses: string[] = [];
+  const connector = discordConnector({
+    fetchImpl: async () => json({ url: 'wss://gateway.discord.test' }),
+    webSocketFactory: () => {
+      const socket = new Socket();
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const service = new DiscordGatewayService(connector, {
+    onMessage: () => undefined,
+    onStatus: (status) => statuses.push(status),
+  });
+  try {
+    await service.start();
+    const socket = sockets[0]!;
+    socket.dispatchEvent(new Event('open'));
+    assert.equal(statuses.includes('connected'), false);
+    socket.emit({ op: 10, d: { heartbeat_interval: 1000 } });
+    assert.equal(socket.sent[0]?.op, 2);
+    assert.equal(socket.sent[0]?.d.intents, 33281);
+    socket.emit({
+      op: 0,
+      t: 'READY',
+      s: 4,
+      d: {
+        session_id: 'test-session',
+        resume_gateway_url: 'wss://gateway.discord.test',
+      },
+    });
+    assert.equal(statuses.at(-1), 'connected');
+    context.mock.timers.tick(0);
+    context.mock.timers.tick(1000);
+    assert.equal(statuses.at(-1), 'disconnected');
+    context.mock.timers.tick(2000);
+    await Promise.resolve();
+    const resumed = sockets[1]!;
+    assert.ok(resumed);
+    resumed.emit({ op: 10, d: { heartbeat_interval: 1000 } });
+    assert.equal(resumed.sent[0]?.op, 6);
+    assert.equal(resumed.sent[0]?.d.session_id, 'test-session');
+    assert.equal(resumed.sent[0]?.d.seq, 4);
+  } finally {
+    service.stop();
+  }
 });
