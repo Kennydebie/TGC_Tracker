@@ -167,4 +167,5 @@ The extension validates token shape, expiration, allowlisted domain, identity, q
 
 The next highest-value step is to wire the existing D1 repository into watchlist, Shadow Mode and portfolio write APIs, then validate the eBay connector in a credentialed staging environment while collecting 30–60 days of Shadow Mode calibration data.
 
-Discord setup, server permissions and the separate worker: [Connection guide](docs/discord-connection.md).
+Discord setup, server permissions, and the Cloudflare/Docker listener options:
+[Connection guide](docs/discord-connection.md).

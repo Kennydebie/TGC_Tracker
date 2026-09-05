@@ -37,9 +37,11 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 /dist/
 /dist-extension/
+/dist-discord-worker/
 /.wrangler/
 /test-results/
 /playwright-report/
 /outputs/
 /work/
 /.discord-state/
+/workers/discord-gateway/.dev.vars*

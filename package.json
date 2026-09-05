@@ -20,6 +20,9 @@
     "worker": "node scripts/run-worker.mjs --once",
     "marktplaats:scan": "node --experimental-strip-types scripts/marktplaats-scout.mjs",
     "community:discord": "node --experimental-strip-types scripts/community-discord-worker.mjs",
+    "community:discord:cloudflare:dev": "wrangler dev --config workers/discord-gateway/wrangler.jsonc",
+    "community:discord:cloudflare:check": "wrangler deploy --dry-run --outdir ../../dist-discord-worker --config workers/discord-gateway/wrangler.jsonc",
+    "community:discord:cloudflare:deploy": "wrangler deploy --config workers/discord-gateway/wrangler.jsonc",
     "extension:build": "node scripts/build-extension.mjs"
   },
   "dependencies": {

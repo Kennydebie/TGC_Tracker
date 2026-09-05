@@ -1,0 +1,32 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "tcg-scout-discord-gateway",
+  "main": "./index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "minify": true,
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DiscordGateway"],
+    },
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+    },
+  },
+}
