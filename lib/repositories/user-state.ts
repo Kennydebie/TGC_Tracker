@@ -522,6 +522,53 @@ export async function resolveReviewItem(
   if (!REVIEW_RESOLUTIONS.has(resolution))
     throw new Error('A valid review resolution is required');
   await ensureUser(db, user);
+  const existing = await db
+    .prepare(
+      `SELECT payload_json FROM review_queue
+       WHERE id = ? AND user_id = ? AND status = 'open'`,
+    )
+    .bind(id, user.id)
+    .first<{ payload_json: string }>();
+  if (!existing) throw new Error('Review item was not found');
+  const payload = JSON.parse(existing.payload_json) as {
+    type?: string;
+    riskFlags?: unknown;
+  };
+  const riskFlags = Array.isArray(payload.riskFlags)
+    ? payload.riskFlags.map(String)
+    : [];
+  const candidateResolutions = new Set([
+    'accept_candidate',
+    'select_alternative',
+    'edit_fields',
+  ]);
+  if (
+    riskFlags.includes('Empty packaging') &&
+    candidateResolutions.has(resolution)
+  )
+    throw new Error(
+      'Empty packaging cannot be accepted or edited into a sealed-product candidate',
+    );
+  if (
+    candidateResolutions.has(resolution) &&
+    payload.type !== 'Parser change'
+  ) {
+    const quantity = details.quantity;
+    if (
+      typeof details.candidate !== 'string' ||
+      !details.candidate.trim() ||
+      !Number.isInteger(quantity) ||
+      Number(quantity) < 1 ||
+      Number(quantity) > 10_000
+    )
+      throw new Error('Candidate and a quantity from 1 to 10,000 are required');
+  }
+  if (
+    payload.type === 'Parser change' &&
+    resolution === 'edit_fields' &&
+    (typeof details.parserValue !== 'string' || !details.parserValue.trim())
+  )
+    throw new Error('A corrected parser value is required');
   if (resolution === 'defer')
     return { id, status: 'open', resolution, resolvedAt: null };
   const resolvedAt = Date.now();

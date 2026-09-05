@@ -491,6 +491,10 @@ export const reviewItems = [
     severity: 'High',
     originalTitle: 'Riftbound Origins display sealed case? 24 packs',
     imageUrl: null,
+    sourceUrl: null,
+    evidenceNote:
+      'Fictional eBay-style title retained without an external listing or image.',
+    dataMode: 'demo' as const,
     currentCandidate: 'Riftbound Origins Booster Display',
     alternativeCandidates: [
       'Riftbound Origins Booster Case',
@@ -512,6 +516,12 @@ export const reviewItems = [
     severity: 'High',
     originalTitle: 'Retailer listing: shipping included',
     imageUrl: null,
+    sourceUrl: null,
+    evidenceNote:
+      'Fixture parser alert: the shipping label moved and needs an explicit corrected value.',
+    dataMode: 'demo' as const,
+    parserField: 'shipping',
+    parsedValue: '',
     currentCandidate: 'Riftbound Origins Booster Display',
     alternativeCandidates: [],
     quantity: 1,
@@ -530,6 +540,10 @@ export const reviewItems = [
     severity: 'Medium',
     originalTitle: 'Pikachu old holo 4/102 taal onbekend',
     imageUrl: null,
+    sourceUrl: null,
+    evidenceNote:
+      'Fictional marketplace title only; language and condition were not verified from an image.',
+    dataMode: 'demo' as const,
     currentCandidate: 'Pikachu 4/102 Base Set',
     alternativeCandidates: ['Pikachu Base Set 2', 'Pikachu Celebrations'],
     quantity: 1,
@@ -548,6 +562,10 @@ export const reviewItems = [
     severity: 'Critical',
     originalTitle: 'Pokemon 151 display box ONLY leeg / empty — read!',
     imageUrl: null,
+    sourceUrl: null,
+    evidenceNote:
+      'Fictional title explicitly says the product is empty packaging; it cannot be accepted as sealed product.',
+    dataMode: 'demo' as const,
     currentCandidate: 'Scarlet & Violet—151 Booster Bundle display',
     alternativeCandidates: ['Empty retail display packaging'],
     quantity: 1,

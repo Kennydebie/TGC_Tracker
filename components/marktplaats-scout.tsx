@@ -6,6 +6,7 @@ import {
   ExternalLink,
   MapPin,
   Radar,
+  RefreshCw,
   ShieldCheck,
   TrendingDown,
 } from 'lucide-react';
@@ -13,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { Badge } from '@/components/ui/badge';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -71,6 +73,7 @@ export function MarktplaatsScout() {
   const [dashboard, setDashboard] = useState(emptyDashboard);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void fetch('/api/marktplaats', { cache: 'no-store' })
@@ -105,7 +108,7 @@ export function MarktplaatsScout() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshKey]);
 
   const groups = useMemo(() => {
     const ugly = new Set<string>(MARKTPLAATS_UGLY_QUERIES);
@@ -156,6 +159,26 @@ export function MarktplaatsScout() {
               <AlertTriangle /> <span>{error}</span>
             </div>
           ) : null}
+          <div className="marktplaats-status-actions">
+            <Button
+              variant="outline"
+              disabled={loading}
+              onClick={() => {
+                setError(null);
+                setLoading(true);
+                setRefreshKey((current) => current + 1);
+              }}
+            >
+              <RefreshCw className={cn(loading && 'spin')} />
+              Refresh status
+            </Button>
+            <NativeNavigationLink
+              className={buttonVariants({ variant: 'outline' })}
+              href="/sources?configure=marktplaats-public"
+            >
+              Setup & recovery
+            </NativeNavigationLink>
+          </div>
         </div>
         <dl className="marktplaats-status-facts">
           <div>
@@ -180,6 +203,20 @@ export function MarktplaatsScout() {
           </div>
         </dl>
       </section>
+
+      {!dashboard.lastScanAt ? (
+        <output className="panel marktplaats-first-scan">
+          <Clock3 />
+          <div>
+            <strong>No completed scan has been recorded yet</strong>
+            <p>
+              Refreshing checks stored status only; it does not trigger a public
+              source request. Scheduled scans run server-side. Open Setup &amp;
+              recovery to verify the deployment configuration.
+            </p>
+          </div>
+        </output>
+      ) : null}
 
       <section className="marktplaats-metrics" aria-label="Latest scan metrics">
         <Metric label="Queries" value={dashboard.metrics.queries} />
@@ -216,36 +253,42 @@ export function MarktplaatsScout() {
           title="NEW IN LAST 15 MINUTES"
           listings={groups.new}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
         <ListingGroup
           value="best"
           title="BEST DEALS"
           listings={groups.best}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
         <ListingGroup
           value="local"
           title="LOCAL PICKUP"
           listings={groups.local}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
         <ListingGroup
           value="ugly"
           title="UGLY LISTINGS"
           listings={groups.ugly}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
         <ListingGroup
           value="drops"
           title="PRICE DROPS"
           listings={groups.drops}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
         <ListingGroup
           value="review"
           title="NEEDS REVIEW"
           listings={groups.review}
           loading={loading}
+          hasCompletedScan={Boolean(dashboard.lastScanAt)}
         />
       </Tabs>
     </div>
@@ -266,11 +309,13 @@ function ListingGroup({
   title,
   listings,
   loading,
+  hasCompletedScan,
 }: {
   value: string;
   title: string;
   listings: MarktplaatsDashboardListing[];
   loading: boolean;
+  hasCompletedScan: boolean;
 }) {
   return (
     <TabsContent value={value}>
@@ -291,7 +336,9 @@ function ListingGroup({
         </div>
       ) : (
         <div className="panel marktplaats-empty">
-          No listings in this group from the latest completed scan.
+          {hasCompletedScan
+            ? 'No listings in this group from the latest completed scan.'
+            : 'No completed scan exists yet; this is not a zero-result scan.'}
         </div>
       )}
     </TabsContent>

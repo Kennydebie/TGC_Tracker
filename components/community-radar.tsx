@@ -95,10 +95,19 @@ const defaultWatchThresholds: WatchThresholds = {
   officialCatalystRequired: false,
 };
 
-export function CommunityRadar() {
+export function CommunityRadar({
+  initialEventId,
+  signInPath,
+  userSignedIn,
+}: {
+  initialEventId?: string;
+  signInPath: string;
+  userSignedIn: boolean;
+}) {
   const [dashboard, setDashboard] = useState<CommunityDashboard | null>(null);
   const [selected, setSelected] = useState<CommunityProductRadar | null>(null);
   const [notice, setNotice] = useState('');
+  const [dialogNotice, setDialogNotice] = useState('');
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [ignoredIds, setIgnoredIds] = useState<Set<string>>(() => new Set());
   const [watchedIds, setWatchedIds] = useState<Set<string>>(() => new Set());
@@ -122,7 +131,15 @@ export function CommunityRadar() {
         return (await response.json()) as { data: CommunityDashboard };
       })
       .then((payload) => {
-        if (!cancelled) setDashboard(payload.data);
+        if (!cancelled) {
+          setDashboard(payload.data);
+          if (initialEventId)
+            setSelected(
+              payload.data.products.find(
+                (product) => product.id === initialEventId,
+              ) ?? null,
+            );
+        }
       })
       .catch((error) => {
         if (!cancelled)
@@ -135,7 +152,12 @@ export function CommunityRadar() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialEventId]);
+
+  const openProduct = (product: CommunityProductRadar) => {
+    setDialogNotice('');
+    setSelected(product);
+  };
 
   const visibleProducts = useMemo(
     () =>
@@ -163,10 +185,14 @@ export function CommunityRadar() {
       };
       if (!response.ok)
         throw new Error(payload.error ?? `HTTP ${response.status}`);
-      setNotice(payload.message ?? success);
+      const message = payload.message ?? success;
+      if (selected) setDialogNotice(message);
+      else setNotice(message);
       return true;
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Action failed.');
+      const message = error instanceof Error ? error.message : 'Action failed.';
+      if (selected) setDialogNotice(message);
+      else setNotice(message);
       return false;
     } finally {
       setPendingAction(null);
@@ -267,7 +293,7 @@ export function CommunityRadar() {
   const confirmedProducts = visibleProducts.filter(
     (product) =>
       product.verificationStatus === 'confirmed' &&
-      product.marketEvidence.estimatedNetProfit !== null,
+      (product.marketEvidence.estimatedNetProfit ?? 0) >= 25,
   );
   const supplyProducts = visibleProducts.filter((product) =>
     ['SUPPLY_EXPANSION', 'SUPPLY_CONTRACTION'].includes(product.classification),
@@ -382,7 +408,7 @@ export function CommunityRadar() {
               product={product}
               watched={watchedIds.has(product.id)}
               pendingAction={pendingAction}
-              onInvestigate={setSelected}
+              onInvestigate={openProduct}
               onWatch={watch}
               onIgnore={ignore}
               onShadow={shadow}
@@ -406,7 +432,7 @@ export function CommunityRadar() {
               <SignalSummary
                 key={product.id}
                 product={product}
-                onOpen={setSelected}
+                onOpen={openProduct}
               />
             ))
           ) : (
@@ -427,7 +453,7 @@ export function CommunityRadar() {
               <SignalSummary
                 key={product.id}
                 product={product}
-                onOpen={setSelected}
+                onOpen={openProduct}
                 danger
               />
             ))
@@ -452,7 +478,7 @@ export function CommunityRadar() {
               <EvidenceSummary
                 key={product.id}
                 product={product}
-                onOpen={setSelected}
+                onOpen={openProduct}
                 kind="confirmed"
               />
             ))
@@ -474,7 +500,7 @@ export function CommunityRadar() {
               <EvidenceSummary
                 key={product.id}
                 product={product}
-                onOpen={setSelected}
+                onOpen={openProduct}
                 kind="supply"
               />
             ))
@@ -558,6 +584,26 @@ export function CommunityRadar() {
               value={watchThresholds}
               onChange={setWatchThresholds}
             />
+            {dialogNotice ? (
+              <div className="community-dialog-notice" role="alert">
+                <Activity />
+                <span>{dialogNotice}</span>
+                {!userSignedIn ? (
+                  <a
+                    className={buttonVariants({ variant: 'outline' })}
+                    href={
+                      selected
+                        ? `/signin-with-chatgpt?return_to=${encodeURIComponent(
+                            `/community?event=${selected.id}`,
+                          )}`
+                        : signInPath
+                    }
+                  >
+                    Sign in and keep this product
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
             <div className="community-dialog-actions">
               <Button
                 className="gold-button"
@@ -760,7 +806,7 @@ function TrendingCard({
 }) {
   const confirmedDeal =
     product.verificationStatus === 'confirmed' &&
-    product.marketEvidence.estimatedNetProfit !== null;
+    (product.marketEvidence.estimatedNetProfit ?? 0) >= 25;
   return (
     <article
       className={cn(
@@ -856,7 +902,7 @@ function TrendingCard({
         </Button>
         <a
           className={cn(buttonVariants({ variant: 'outline' }), 'iron-button')}
-          href={`/market?q=${encodeURIComponent(product.product)}`}
+          href={`/market?productId=${encodeURIComponent(product.canonicalProductId)}`}
         >
           <ChartNoAxesCombined /> View market
         </a>

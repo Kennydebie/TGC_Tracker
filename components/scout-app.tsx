@@ -97,7 +97,6 @@ import {
 import { cn } from '@/lib/utils';
 import {
   deals,
-  portfolio,
   releases,
   reviewItems as fixtureReviewItems,
   shadowTrades,
@@ -114,9 +113,26 @@ import {
   type Deal,
   type DealEconomics,
 } from '@/lib/domain';
+import {
+  completedSaleProfit,
+  DEMO_COMPLETED_SALES,
+  DEMO_PORTFOLIO_HOLDINGS,
+  portfolioExposure,
+  summarizeDemoPortfolio,
+} from '@/lib/portfolio';
 import { isSafeSourceListingUrl } from '@/lib/listing-url';
 import type { MarktplaatsDashboard } from '@/lib/marktplaats';
 import type { AmazonDashboard } from '@/lib/amazon';
+import {
+  buildPortfolioCsv,
+  calculateLotOffer,
+  daysUntilRelease,
+  normalizeIdentity,
+  searchDealsByIdentity,
+  sortReleasesChronologically,
+  validateAlertRule,
+  validateUserSettings,
+} from '@/lib/workflow-integrity';
 
 type Section =
   | 'dashboard'
@@ -139,6 +155,7 @@ type Section =
 type ScoutAppProps = {
   initialSection?: string;
   initialDealId?: string;
+  initialSearchParams?: Record<string, string>;
   user?: { displayName: string; email: string } | null;
   signInPath?: string;
   signOutPath?: string;
@@ -176,6 +193,12 @@ type ReviewQueueItem = {
   severity: string;
   originalTitle: string;
   imageUrl: string | null;
+  sourceUrl?: string | null;
+  evidenceNote?: string;
+  dataMode?: 'demo' | 'production' | 'session';
+  sessionOnly?: boolean;
+  parserField?: string;
+  parsedValue?: string;
   currentCandidate: string;
   alternativeCandidates: string[];
   quantity: number;
@@ -218,6 +241,16 @@ function verificationLabel(item: Deal) {
         timeZone: 'Europe/Amsterdam',
       });
   return `${status} · checked ${checkedLabel}`;
+}
+
+function dealAgeLabel(item: Deal, now = Date.now()) {
+  if (item.dataMode === 'demo') return `Fixture age label · ${item.listingAge}`;
+  const detectedAt = Date.parse(item.detectedAt);
+  if (!Number.isFinite(detectedAt)) return 'Detection time unavailable';
+  const minutes = Math.max(0, Math.floor((now - detectedAt) / 60_000));
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
 
 const navItems: {
@@ -410,6 +443,7 @@ const validSections = new Set(navItems.map((item) => item.section));
 export function ScoutApp({
   initialSection = 'dashboard',
   initialDealId,
+  initialSearchParams = {},
   user,
   signInPath = '/signin-with-chatgpt?return_to=%2F',
   signOutPath = '/signout-with-chatgpt?return_to=%2F',
@@ -441,6 +475,15 @@ export function ScoutApp({
     () => new Set(),
   );
   const [shadowRows, setShadowRows] = useState<ShadowTradeRow[]>(shadowTrades);
+
+  useEffect(() => {
+    if (!initialDealId) return;
+    queueMicrotask(() =>
+      setSelectedDeal(
+        dealRecords.find((candidate) => candidate.id === initialDealId) ?? null,
+      ),
+    );
+  }, [dealRecords, initialDealId]);
 
   useEffect(() => {
     document.documentElement.dataset.scoutHydrated = 'true';
@@ -886,6 +929,7 @@ export function ScoutApp({
           {section === 'deals' && (
             <DealsPage
               deals={dealRecords}
+              initialQuery={initialSearchParams.q ?? ''}
               onInspect={setSelectedDeal}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
@@ -896,16 +940,30 @@ export function ScoutApp({
           )}
           {section === 'marktplaats' && <MarktplaatsScout />}
           {section === 'amazon' && <AmazonScout />}
-          {section === 'community' && <CommunityRadar />}
+          {section === 'community' && (
+            <CommunityRadar
+              initialEventId={initialSearchParams.event}
+              signInPath={signInPath}
+              userSignedIn={Boolean(user)}
+            />
+          )}
           {section === 'lot-lab' && <LotLab onNotice={setNotice} />}
           {section === 'market' && (
             <MarketPage
               deals={dealRecords}
+              initialDealId={initialSearchParams.dealId}
+              initialProductId={initialSearchParams.productId}
+              initialQuery={initialSearchParams.q ?? ''}
               onTrack={toggleTrack}
               trackedIds={trackedIds}
             />
           )}
-          {section === 'releases' && <ReleasesPage onNotice={setNotice} />}
+          {section === 'releases' && (
+            <ReleasesPage
+              initialReleaseId={initialSearchParams.releaseId}
+              onNotice={setNotice}
+            />
+          )}
           {section === 'scanner' && (
             <ScannerPage deals={dealRecords} onNotice={setNotice} />
           )}
@@ -923,7 +981,7 @@ export function ScoutApp({
           {section === 'shadow' && <ShadowPage trades={shadowRows} />}
           {section === 'alerts' && (
             <AlertsPage
-              deal={dealRecords[0] ?? null}
+              deals={dealRecords}
               onInspect={setSelectedDeal}
               onNotice={setNotice}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
@@ -931,9 +989,18 @@ export function ScoutApp({
               userSignedIn={Boolean(user)}
             />
           )}
-          {section === 'sources' && <SourcesPage onNotice={setNotice} />}
+          {section === 'sources' && (
+            <SourcesPage
+              initialConfigureId={initialSearchParams.configure}
+              onNotice={setNotice}
+            />
+          )}
           {section === 'review' && (
-            <ReviewPage onNotice={setNotice} userSignedIn={Boolean(user)} />
+            <ReviewPage
+              initialSource={initialSearchParams.source}
+              onNotice={setNotice}
+              userSignedIn={Boolean(user)}
+            />
           )}
           {section === 'settings' && (
             <SettingsPage onNotice={setNotice} userSignedIn={Boolean(user)} />
@@ -1184,6 +1251,13 @@ function Dashboard({
   trackedIds: Set<string>;
 }) {
   const qualified = records.filter(qualifiesForQuickFlip);
+  const orderedReleases = sortReleasesChronologically(releases);
+  const nextReleaseDays = Math.min(
+    ...orderedReleases.map(
+      (release) =>
+        daysUntilRelease(release.releaseDate) ?? Number.POSITIVE_INFINITY,
+    ),
+  );
   return (
     <div className="page-stack">
       <Panel className="command-panel">
@@ -1267,7 +1341,11 @@ function Dashboard({
           icon={CalendarDays}
           label="Releases nearing"
           value={String(releases.length)}
-          detail={`next in ${Math.min(...releases.map((item) => item.daysAway))} days`}
+          detail={
+            Number.isFinite(nextReleaseDays)
+              ? `next in ${Math.max(0, nextReleaseDays)} days`
+              : 'no dated release'
+          }
           tone="blue"
         />
         <MetricPlaque
@@ -1356,7 +1434,7 @@ function Dashboard({
               deal={records[0] ?? null}
               tone="critical"
               title="Target crossed"
-              time="11m"
+              time="Fixture event 1"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
                 records[0] && recheckingIds.has(records[0].id),
@@ -1366,8 +1444,8 @@ function Dashboard({
               deal={records[1] ?? null}
               tone="positive"
               title="New sold evidence"
-              detail="Destined Rivals · median +2.1%"
-              time="47m"
+              detail="Fictional Destined Rivals completed-sale cohort"
+              time="Fixture event 2"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
                 records[1] && recheckingIds.has(records[1].id),
@@ -1378,7 +1456,7 @@ function Dashboard({
               tone="warning"
               title="Price changed"
               detail="Origins display · exit now negative"
-              time="2h"
+              time="Fixture event 3"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
                 records[2] && recheckingIds.has(records[2].id),
@@ -1406,7 +1484,7 @@ function Dashboard({
             }
           />
           <div className="release-grid">
-            {releases.map((release) => (
+            {orderedReleases.map((release) => (
               <ReleaseTile key={release.id} release={release} />
             ))}
           </div>
@@ -1505,7 +1583,7 @@ function DealCard({
         <div className="deal-meta">
           <span>{item.game}</span>
           <i /> <span>{item.set}</span>
-          <i /> <span>{item.listingAge} ago</span>
+          <i /> <span>{dealAgeLabel(item)}</span>
         </div>
         <Badge variant="outline">
           {item.dataMode === 'demo'
@@ -1697,11 +1775,12 @@ function WatchEvent({
 }
 
 function ReleaseTile({ release }: { release: (typeof releases)[number] }) {
+  const daysAway = daysUntilRelease(release.releaseDate);
   return (
     <article className="release-tile">
       <div className="release-date">
-        <strong>{release.daysAway}</strong>
-        <small>days</small>
+        <strong>{daysAway === null ? '—' : Math.max(0, daysAway)}</strong>
+        <small>{daysAway !== null && daysAway < 0 ? 'days ago' : 'days'}</small>
       </div>
       <div className="release-copy">
         <span className="eyebrow">
@@ -1726,6 +1805,7 @@ function ReleaseTile({ release }: { release: (typeof releases)[number] }) {
 
 function DealsPage({
   deals: records,
+  initialQuery,
   onInspect,
   onOpenListing,
   onTrack,
@@ -1734,6 +1814,7 @@ function DealsPage({
   trackedIds,
 }: {
   deals: Deal[];
+  initialQuery: string;
   onInspect: (deal: Deal) => void;
   onOpenListing: (deal: Deal) => void;
   onTrack: (id: string) => Promise<void>;
@@ -1746,16 +1827,36 @@ function DealsPage({
   const [minimumProfit, setMinimumProfit] = useState('0');
   const [sort, setSort] = useState('score');
   const [view, setView] = useState<'cards' | 'table'>('cards');
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [minimumRoi, setMinimumRoi] = useState(0);
   const [minimumGrade, setMinimumGrade] = useState('C');
   const [maximumRisk, setMaximumRisk] = useState(100);
   const [maximumAgeHours, setMaximumAgeHours] = useState(168);
   const [exitMarket, setExitMarket] = useState('any');
-  useEffect(() => {
-    const search = new URLSearchParams(window.location.search).get('q');
-    if (search) queueMicrotask(() => setQuery(search));
-  }, []);
+  const clearFilters = () => {
+    setGame('all');
+    setSource('all');
+    setMinimumProfit('0');
+    setSort('score');
+    setQuery('');
+    setMinimumRoi(0);
+    setMinimumGrade('C');
+    setMaximumRisk(100);
+    setMaximumAgeHours(168);
+    setExitMarket('any');
+  };
+  const activeFilterCount = [
+    game !== 'all',
+    source !== 'all',
+    minimumProfit !== '0',
+    sort !== 'score',
+    Boolean(query.trim()),
+    minimumRoi !== 0,
+    minimumGrade !== 'C',
+    maximumRisk !== 100,
+    maximumAgeHours !== 168,
+    exitMarket !== 'any',
+  ].filter(Boolean).length;
   const filtered = useMemo(() => {
     const gradeRank = { A: 3, B: 2, C: 1, D: 0 } as const;
     const list = records.filter((item) => {
@@ -1832,7 +1933,7 @@ function DealsPage({
         </label>
         <Select value={game} onValueChange={(value) => setGame(value ?? 'all')}>
           <SelectTrigger aria-label="Filter by game">
-            <SelectValue />
+            <SelectValue>{game === 'all' ? 'All games' : game}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All games</SelectItem>
@@ -1845,7 +1946,9 @@ function DealsPage({
           onValueChange={(value) => setSource(value ?? 'all')}
         >
           <SelectTrigger aria-label="Filter by source">
-            <SelectValue />
+            <SelectValue>
+              {source === 'all' ? 'All sources' : source}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All sources</SelectItem>
@@ -1859,7 +1962,13 @@ function DealsPage({
           onValueChange={(value) => setMinimumProfit(value ?? '0')}
         >
           <SelectTrigger aria-label="Minimum profit">
-            <SelectValue />
+            <SelectValue>
+              {{
+                '0': 'Any profit',
+                '25': 'Profit ≥ €25',
+                '100': 'Profit ≥ €100',
+              }[minimumProfit] ?? `Profit ≥ €${minimumProfit}`}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="0">Any profit</SelectItem>
@@ -1872,7 +1981,13 @@ function DealsPage({
           onValueChange={(value) => setSort(value ?? 'score')}
         >
           <SelectTrigger aria-label="Sort deals">
-            <SelectValue />
+            <SelectValue>
+              {{
+                score: 'Best score',
+                profit: 'Highest profit',
+                risk: 'Lowest risk',
+              }[sort] ?? 'Best score'}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="score">Best score</SelectItem>
@@ -1885,6 +2000,7 @@ function DealsPage({
             render={
               <Button variant="outline" className="iron-button">
                 <Filter /> More filters
+                {activeFilterCount ? ` (${activeFilterCount} active)` : ''}
               </Button>
             }
           />
@@ -1936,7 +2052,7 @@ function DealsPage({
           · {records.filter((item) => item.dataMode === 'demo').length} demo
         </span>
         <span>
-          <Clock3 /> Last ranked 38 seconds ago
+          <Clock3 /> Ranking refreshes with the loaded source records
         </span>
       </div>
       {filtered.length === 0 ? (
@@ -1944,15 +2060,7 @@ function DealsPage({
           <Compass />
           <h2>No bounty matches these rules</h2>
           <p>Widen the profit threshold or include another source.</p>
-          <Button
-            className="gold-button"
-            onClick={() => {
-              setGame('all');
-              setSource('all');
-              setMinimumProfit('0');
-              setQuery('');
-            }}
-          >
+          <Button className="gold-button" onClick={clearFilters}>
             Clear filters
           </Button>
         </Panel>
@@ -2011,6 +2119,8 @@ function FilterSheet({
         <Input
           aria-label="Minimum ROI percent"
           type="number"
+          min="0"
+          max="500"
           value={Math.round(minimumRoi * 100)}
           onChange={(event) =>
             onMinimumRoiChange(Number(event.target.value) / 100)
@@ -2023,8 +2133,12 @@ function FilterSheet({
           value={minimumGrade}
           onValueChange={(value) => onMinimumGradeChange(value ?? 'C')}
         >
-          <SelectTrigger>
-            <SelectValue />
+          <SelectTrigger aria-label="Minimum confidence grade">
+            <SelectValue>
+              {{ A: 'A only', B: 'B or better', C: 'C or better' }[
+                minimumGrade
+              ] ?? minimumGrade}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="A">A only</SelectItem>
@@ -2037,6 +2151,8 @@ function FilterSheet({
         <span>Maximum risk score</span>
         <Input
           type="number"
+          min="0"
+          max="100"
           value={maximumRisk}
           onChange={(event) => onMaximumRiskChange(Number(event.target.value))}
         />
@@ -2049,8 +2165,14 @@ function FilterSheet({
             onMaximumAgeHoursChange(Number(value ?? 168))
           }
         >
-          <SelectTrigger>
-            <SelectValue />
+          <SelectTrigger aria-label="Listing age">
+            <SelectValue>
+              {{
+                '1': 'Last hour',
+                '24': 'Last 24 hours',
+                '168': 'Last 7 days',
+              }[String(maximumAgeHours)] ?? `${maximumAgeHours} hours`}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="1">Last hour</SelectItem>
@@ -2066,7 +2188,14 @@ function FilterSheet({
           onValueChange={(value) => onExitMarketChange(value ?? 'any')}
         >
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue>
+              {{
+                any: 'Any named exit',
+                cardmarket: 'Cardmarket',
+                ebay: 'eBay',
+                local: 'Local',
+              }[exitMarket] ?? exitMarket}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="any">Any named exit</SelectItem>
@@ -2120,7 +2249,7 @@ function DealTable({
             </TableCell>
             <TableCell>
               {item.source}
-              <small className="table-sub">{item.listingAge} ago</small>
+              <small className="table-sub">{dealAgeLabel(item)}</small>
             </TableCell>
             <TableCell className="mono">
               {money(item.economics.allInCost)}
@@ -2398,28 +2527,28 @@ function EvidenceDetail({ deal: item }: { deal: Deal }) {
       type: 'Fictional demonstration transaction',
       source: 'Cardmarket',
       price: item.economics.expectedSalePrice - 4,
-      age: '2h',
+      age: 'Fixture offset T-2h',
       weight: 'High',
     },
     {
       type: 'Fictional demonstration transaction',
       source: 'eBay',
       price: item.economics.expectedSalePrice + 7,
-      age: '1d',
+      age: 'Fixture offset T-1d',
       weight: 'High',
     },
     {
       type: 'Reference price',
       source: 'Cardmarket guide',
       price: item.economics.expectedSalePrice + 2,
-      age: '6h',
+      age: 'Fixture offset T-6h',
       weight: 'Medium',
     },
     {
       type: 'Active ask',
       source: item.source,
       price: item.economics.itemPrice,
-      age: item.listingAge,
+      age: dealAgeLabel(item),
       weight: 'Detection only',
     },
   ];
@@ -2549,13 +2678,108 @@ function RiskDetail({ deal: item }: { deal: Deal }) {
   );
 }
 
+type LotCandidate = {
+  id: string;
+  name: string;
+  detail: string;
+  value: string;
+  confidence: number;
+  tone: string;
+  quantity: number;
+  condition: string;
+  evidenceNote: string;
+};
+
+const demoLotCandidates: LotCandidate[] = [
+  {
+    id: 'lot-charizard',
+    name: 'Charizard 4/102 holo',
+    detail: 'Base Set · probable unlimited · raw',
+    value: '€142–€186',
+    confidence: 72,
+    tone: 'amber',
+    quantity: 1,
+    condition: 'Raw · condition unverified',
+    evidenceNote:
+      'Front-only fictional binder photo; edition and condition need review.',
+  },
+  {
+    id: 'lot-blastoise',
+    name: 'Blastoise 2/102 holo',
+    detail: 'Base Set · possible crease',
+    value: '€64–€98',
+    confidence: 81,
+    tone: 'blue',
+    quantity: 1,
+    condition: 'Raw · possible crease',
+    evidenceNote: 'Fictional image candidate; crease has not been inspected.',
+  },
+  {
+    id: 'lot-modern-holos',
+    name: 'Mixed modern holos',
+    detail: 'Bulk residual until verified',
+    value: '€18–€31',
+    confidence: 93,
+    tone: 'emerald',
+    quantity: 29,
+    condition: 'Mixed · ungraded',
+    evidenceNote: 'Grouped as bulk; no individual market values are assumed.',
+  },
+];
+
+const demoLotReviewItems: ReviewQueueItem[] = demoLotCandidates.map(
+  (candidate, index) => ({
+    id: `lot-review:${candidate.id}`,
+    type: index === 2 ? 'Bulk grouping' : 'Product match',
+    title: `Confirm ${candidate.name}`,
+    source: 'Lot Lab demo binder',
+    confidence: candidate.confidence,
+    age: 'This session',
+    severity: index === 0 ? 'High' : 'Medium',
+    originalTitle: candidate.name,
+    imageUrl: null,
+    sourceUrl: null,
+    evidenceNote: candidate.evidenceNote,
+    dataMode: 'session',
+    sessionOnly: true,
+    currentCandidate: candidate.name,
+    alternativeCandidates: [],
+    quantity: candidate.quantity,
+    language: 'Unknown from fictional photo',
+    condition: candidate.condition,
+    productType: index === 2 ? 'Bulk cards' : 'Single card',
+    riskFlags: ['Fictional binder image', 'Manual confirmation required'],
+  }),
+);
+
 function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
-  const [laborHours, setLaborHours] = useState(6.5);
-  const [requiredProfit, setRequiredProfit] = useState(100);
+  const [laborHours, setLaborHours] = useState('6.5');
+  const [requiredProfit, setRequiredProfit] = useState('100');
   const [selectedFileCount, setSelectedFileCount] = useState(0);
+  const [demoLoaded, setDemoLoaded] = useState(false);
+  const [candidates, setCandidates] = useState(demoLotCandidates);
+  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(
+    null,
+  );
+  const [candidateDraft, setCandidateDraft] = useState<LotCandidate | null>(
+    null,
+  );
   const uploaded = selectedFileCount > 0;
-  const collectionNet = 292 - laborHours * 18 - 35 - 14 - 22;
-  const maximumOffer = Math.max(0, collectionNet - requiredProfit);
+  const numberFromDraft = (value: string) =>
+    value.trim() ? Number(value) : Number.NaN;
+  const offer = calculateLotOffer({
+    grossExit: 292,
+    laborHours: numberFromDraft(laborHours),
+    laborRate: 18,
+    liquidityHaircut: 35,
+    expectedLoss: 14,
+    sellingCosts: 22,
+    requiredProfit: numberFromDraft(requiredProfit),
+  });
+  const maximumOffer = offer.maximumOffer;
+  const activeCandidate = candidates.find(
+    (candidate) => candidate.id === editingCandidateId,
+  );
   return (
     <div className="page-stack">
       <div className="lot-grid">
@@ -2602,8 +2826,9 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               className="gold-button"
               onClick={() => {
                 setSelectedFileCount(6);
+                setDemoLoaded(true);
                 onNotice(
-                  'Demo lot loaded. 31 candidates identified; 53 uncertain items moved to review.',
+                  'Fictional demo binder loaded: 3 visible candidates and 3 linked review items. Nothing was persisted.',
                 );
               }}
             >
@@ -2634,7 +2859,9 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
             title="Maximum offer"
             subtitle="Exit-first, after labour and reserves"
           />
-          <strong className="maximum-offer mono">{money(maximumOffer)}</strong>
+          <strong className="maximum-offer mono">
+            {maximumOffer === null ? 'Unavailable' : money(maximumOffer)}
+          </strong>
           <div className="offer-confidence">
             <span>Confidence C</span>
             <Progress value={64} />
@@ -2642,19 +2869,19 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
           </div>
           <LedgerRow label="Identified net exit" value={292} />
           <LedgerRow
-            label={`Sorting & listing labour (${laborHours}h)`}
-            value={-(laborHours * 18)}
+            label={`Sorting & listing labour (${laborHours || '—'}h)`}
+            value={-(offer.laborCost ?? 0)}
           />
           <LedgerRow label="Unsold reserve" value={-35} />
           <LedgerRow label="Condition & counterfeit reserve" value={-14} />
           <LedgerRow label="Storage & packaging" value={-22} />
           <LedgerRow
             label="Required collection profit"
-            value={-requiredProfit}
+            value={-Math.max(0, numberFromDraft(requiredProfit) || 0)}
           />
           <LedgerRow
             label="Maximum collection offer"
-            value={maximumOffer}
+            value={maximumOffer ?? 0}
             total
           />
         </Panel>
@@ -2663,50 +2890,40 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
         <Panel>
           <SectionHeading
             title="Candidate review"
-            subtitle="31 identified · 53 uncertain · 3 priority checks"
+            subtitle={
+              demoLoaded
+                ? '3 fictional candidates · 3 linked review checks · session only'
+                : 'Fictional examples · load the demo binder to link its review checks'
+            }
             action={
               <Button
                 variant="outline"
                 className="iron-button"
                 onClick={() => {
-                  window.location.href = '/review';
+                  if (!demoLoaded) {
+                    onNotice(
+                      'Load the demo binder before opening its review items.',
+                    );
+                    return;
+                  }
+                  window.location.href = '/review?source=lot-lab';
                 }}
               >
-                Resolve uncertainty
+                {demoLoaded ? 'Resolve 3 linked checks' : 'Load demo to review'}
               </Button>
             }
           />
           <div className="candidate-grid">
-            <CandidateCard
-              name="Charizard 4/102 holo"
-              detail="Base Set · probable unlimited · raw"
-              value="€142–€186"
-              confidence={72}
-              tone="amber"
-              onEdit={() =>
-                onNotice('Candidate editor opened for Charizard 4/102.')
-              }
-            />
-            <CandidateCard
-              name="Blastoise 2/102 holo"
-              detail="Base Set · possible crease"
-              value="€64–€98"
-              confidence={81}
-              tone="blue"
-              onEdit={() =>
-                onNotice('Candidate editor opened for Blastoise 2/102.')
-              }
-            />
-            <CandidateCard
-              name="Mixed modern holos × 29"
-              detail="Bulk residual until verified"
-              value="€18–€31"
-              confidence={93}
-              tone="emerald"
-              onEdit={() =>
-                onNotice('Candidate editor opened for modern holo lot.')
-              }
-            />
+            {candidates.map((candidate) => (
+              <CandidateCard
+                key={candidate.id}
+                {...candidate}
+                onEdit={() => {
+                  setEditingCandidateId(candidate.id);
+                  setCandidateDraft({ ...candidate });
+                }}
+              />
+            ))}
           </div>
         </Panel>
         <Panel className="labor-editor">
@@ -2721,8 +2938,12 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               min="0.5"
               step="0.5"
               value={laborHours}
-              onChange={(event) => setLaborHours(Number(event.target.value))}
+              aria-invalid={Boolean(offer.errors.laborHours)}
+              onChange={(event) => setLaborHours(event.target.value)}
             />
+            {offer.errors.laborHours ? (
+              <small className="field-error">{offer.errors.laborHours}</small>
+            ) : null}
           </label>
           <label>
             <span>Required net profit</span>
@@ -2731,10 +2952,14 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
               min="0"
               step="10"
               value={requiredProfit}
-              onChange={(event) =>
-                setRequiredProfit(Number(event.target.value))
-              }
+              aria-invalid={Boolean(offer.errors.requiredProfit)}
+              onChange={(event) => setRequiredProfit(event.target.value)}
             />
+            {offer.errors.requiredProfit ? (
+              <small className="field-error">
+                {offer.errors.requiredProfit}
+              </small>
+            ) : null}
           </label>
           <label>
             <span>Labour rate</span>
@@ -2743,25 +2968,130 @@ function LotLab({ onNotice }: { onNotice: (text: string) => void }) {
           <div
             className={cn(
               'decision-banner',
-              maximumOffer >= 20 ? 'warn' : 'reject',
+              maximumOffer !== null && maximumOffer >= 20 ? 'warn' : 'reject',
             )}
           >
             <Scale />
             <div>
               <strong>
-                {maximumOffer >= 20
-                  ? 'MANUAL INSPECTION REQUIRED'
-                  : 'REJECT COLLECTION'}
+                {maximumOffer === null
+                  ? 'CORRECT INVALID ASSUMPTIONS'
+                  : maximumOffer >= 20
+                    ? 'MANUAL INSPECTION REQUIRED'
+                    : 'REJECT COLLECTION'}
               </strong>
               <span>
-                {maximumOffer >= 20
-                  ? `Do not offer above ${money(maximumOffer)} before inspecting the three priority cards.`
-                  : 'Labour and reserves consume the supported value.'}
+                {maximumOffer === null
+                  ? 'The offer is withheld until every cost input is finite and non-negative.'
+                  : maximumOffer >= 20
+                    ? `Do not offer above ${money(maximumOffer)} before inspecting the three priority cards.`
+                    : 'Labour and reserves consume the supported value.'}
               </span>
             </div>
           </div>
         </Panel>
       </div>
+      <Dialog
+        open={Boolean(activeCandidate && candidateDraft)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingCandidateId(null);
+            setCandidateDraft(null);
+          }
+        }}
+      >
+        {candidateDraft ? (
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Review fictional lot candidate</DialogTitle>
+              <DialogDescription>
+                Correct identity and evidence only. The demo value range is not
+                recalculated or treated as sale evidence.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="dialog-form-grid">
+              <label>
+                Candidate identity
+                <Input
+                  value={candidateDraft.name}
+                  onChange={(event) =>
+                    setCandidateDraft({
+                      ...candidateDraft,
+                      name: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Quantity
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={candidateDraft.quantity}
+                  onChange={(event) =>
+                    setCandidateDraft({
+                      ...candidateDraft,
+                      quantity: Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Condition
+                <Input
+                  value={candidateDraft.condition}
+                  onChange={(event) =>
+                    setCandidateDraft({
+                      ...candidateDraft,
+                      condition: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Captured evidence note
+                <Input
+                  value={candidateDraft.evidenceNote}
+                  onChange={(event) =>
+                    setCandidateDraft({
+                      ...candidateDraft,
+                      evidenceNote: event.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button
+                className="gold-button"
+                disabled={
+                  !candidateDraft.name.trim() ||
+                  !Number.isInteger(candidateDraft.quantity) ||
+                  candidateDraft.quantity < 1 ||
+                  !candidateDraft.evidenceNote.trim()
+                }
+                onClick={() => {
+                  setCandidates((current) =>
+                    current.map((candidate) =>
+                      candidate.id === candidateDraft.id
+                        ? candidateDraft
+                        : candidate,
+                    ),
+                  );
+                  onNotice(
+                    `${candidateDraft.name} was updated in this demo session; its modelled range was not changed.`,
+                  );
+                  setEditingCandidateId(null);
+                  setCandidateDraft(null);
+                }}
+              >
+                Save candidate review
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
@@ -2772,13 +3102,11 @@ function CandidateCard({
   value,
   confidence,
   tone,
+  quantity,
+  condition,
+  evidenceNote,
   onEdit,
-}: {
-  name: string;
-  detail: string;
-  value: string;
-  confidence: number;
-  tone: string;
+}: Omit<LotCandidate, 'id'> & {
   onEdit: () => void;
 }) {
   return (
@@ -2787,8 +3115,12 @@ function CandidateCard({
         <Sparkles />
       </div>
       <div>
-        <h3>{name}</h3>
+        <h3>
+          {name} {quantity > 1 ? `× ${quantity}` : ''}
+        </h3>
         <p>{detail}</p>
+        <small>{condition}</small>
+        <small>{evidenceNote}</small>
         <strong className="mono">{value}</strong>
         <div className="confidence-line">
           <span>Identification</span>
@@ -2805,36 +3137,55 @@ function CandidateCard({
 
 function MarketPage({
   deals: records,
+  initialDealId,
+  initialProductId,
+  initialQuery,
   onTrack,
   trackedIds,
 }: {
   deals: Deal[];
+  initialDealId?: string;
+  initialProductId?: string;
+  initialQuery: string;
   onTrack: (id: string) => Promise<void>;
   trackedIds: Set<string>;
 }) {
-  const [selected, setSelected] = useState(records[0]);
-  const [marketQuery, setMarketQuery] = useState('Prismatic Evolutions ETB');
-  const [marketResults, setMarketResults] = useState(records.slice(0, 4));
+  const initialSearchValue =
+    initialQuery || initialProductId?.replaceAll('-', ' ') || '';
+  const [selected, setSelected] = useState<Deal | null>(() => {
+    const initial = searchDealsByIdentity(
+      records,
+      initialSearchValue,
+      initialDealId,
+    );
+    return initial[0] ?? null;
+  });
+  const [marketQuery, setMarketQuery] = useState(initialSearchValue);
+  const [marketResults, setMarketResults] = useState(() =>
+    searchDealsByIdentity(records, initialSearchValue, initialDealId),
+  );
   useEffect(() => {
     queueMicrotask(() => {
-      setMarketResults(records.slice(0, 4));
-      setSelected(
-        (current) =>
-          records.find((item) => item.id === current?.id) ?? records[0],
+      const next = searchDealsByIdentity(
+        records,
+        initialSearchValue,
+        initialDealId,
       );
+      setMarketResults(next);
+      setSelected((current) => {
+        if (current) {
+          const refreshed = next.find((item) => item.id === current.id);
+          if (refreshed) return refreshed;
+        }
+        return next[0] ?? null;
+      });
     });
-  }, [records]);
-  const history = [128, 132, 129, 137, 142, 151, 154, 162, 169, 171, 178, 182];
-  const points = history
-    .map((value, index) => `${index * 38},${135 - (value - 120) * 1.65}`)
-    .join(' ');
-  if (!selected)
-    return (
-      <Panel className="empty-state">
-        <Search />
-        <h2>No market records available</h2>
-      </Panel>
-    );
+  }, [initialDealId, initialSearchValue, records]);
+  const runMarketSearch = () => {
+    const next = searchDealsByIdentity(records, marketQuery);
+    setMarketResults(next);
+    setSelected(next[0] ?? null);
+  };
   return (
     <div className="page-stack">
       <Panel className="market-command">
@@ -2846,18 +3197,7 @@ function MarketPage({
             onChange={(event) => setMarketQuery(event.target.value)}
           />
         </label>
-        <Button
-          className="gold-button"
-          onClick={() => {
-            const next = records.filter((item) =>
-              `${item.canonicalProduct} ${item.set} ${item.sourceListingId}`
-                .toLowerCase()
-                .includes(marketQuery.toLowerCase()),
-            );
-            setMarketResults(next);
-            setSelected(next[0] ?? records[0]);
-          }}
-        >
+        <Button className="gold-button" onClick={runMarketSearch}>
           Search market
         </Button>
       </Panel>
@@ -2867,141 +3207,144 @@ function MarketPage({
             title="Canonical products"
             subtitle="Identity before price comparison"
           />
-          {marketResults.map((item) => (
-            <button
-              className={cn(
-                'market-result',
-                selected.id === item.id && 'active',
-              )}
-              onClick={() => setSelected(item)}
-              key={item.id}
-            >
-              <ProductGlyph deal={item} compact />
-              <span>
-                <strong>{item.canonicalProduct}</strong>
-                <small>
-                  {item.game} · {item.productType} · {item.language}
-                </small>
-              </span>
-              <Badge variant="outline">{item.matchConfidence}%</Badge>
-            </button>
-          ))}
-        </Panel>
-        <div className="market-detail-stack">
-          <Panel className="price-chart-panel">
-            <div className="chart-header">
-              <div>
-                <span className="eyebrow">
-                  {selected.game} · {selected.set}
+          {marketResults.length ? (
+            marketResults.map((item) => (
+              <button
+                className={cn(
+                  'market-result',
+                  selected?.id === item.id && 'active',
+                )}
+                onClick={() => setSelected(item)}
+                key={item.id}
+              >
+                <ProductGlyph deal={item} compact />
+                <span>
+                  <strong>{item.canonicalProduct}</strong>
+                  <small>
+                    {item.game} · {item.set} · {item.productType} ·{' '}
+                    {item.language}
+                  </small>
                 </span>
-                <h2>{selected.canonicalProduct}</h2>
-                <p>Robust median from supported evidence</p>
+                <Badge variant="outline">{item.matchConfidence}%</Badge>
+              </button>
+            ))
+          ) : (
+            <output className="market-no-results">
+              <Search />
+              <strong>No supported market comparison</strong>
+              <span>
+                No canonical record matches “{marketQuery || 'this query'}”. No
+                unrelated product has been substituted.
+              </span>
+            </output>
+          )}
+        </Panel>
+        {selected ? (
+          <div className="market-detail-stack">
+            <Panel className="price-chart-panel">
+              <div className="chart-header">
+                <div>
+                  <span className="eyebrow">
+                    {selected.game} · {selected.set}
+                  </span>
+                  <h2>{selected.canonicalProduct}</h2>
+                  <p>
+                    Modelled conservative exit—not an observed market median
+                  </p>
+                </div>
+                <div className="chart-value">
+                  <strong className="mono">
+                    {money(selected.economics.expectedSalePrice)}
+                  </strong>
+                  <Badge variant="outline">MODELLED VALUE</Badge>
+                </div>
               </div>
-              <div className="chart-value">
-                <strong className="mono">
-                  {money(selected.economics.expectedSalePrice)}
-                </strong>
-                <Delta value={0.084} />
+              <div className="market-evidence-gap">
+                <Info />
+                <div>
+                  <strong>No product-scoped time series is available</strong>
+                  <span>
+                    TCG Scout will not draw a synthetic history from another
+                    product. {selected.priceEvidence}
+                  </span>
+                </div>
               </div>
-            </div>
-            <svg
-              className="price-chart"
-              aria-label="Twelve week price history"
-              viewBox="0 0 420 150"
-            >
-              <title>Twelve week price history</title>
-              <defs>
-                <linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop stopColor="#c99a43" stopOpacity=".35" />
-                  <stop offset="1" stopColor="#c99a43" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path d={`M${points} L418,150 L0,150Z`} fill="url(#chart-fill)" />
-              <polyline
-                points={points}
-                fill="none"
-                stroke="#e4bd65"
-                strokeWidth="3"
+              <div className="market-stat-row">
+                <EconomicMetric
+                  label="Observed ask"
+                  value={money(selected.economics.itemPrice)}
+                />
+                <EconomicMetric
+                  label="Modelled gross exit"
+                  value={money(selected.economics.expectedSalePrice)}
+                />
+                <EconomicMetric
+                  label="Conservative net exit"
+                  value={money(selected.economics.conservativeNetExit)}
+                />
+                <EconomicMetric
+                  label="Sold 30d"
+                  value={String(selected.soldCount30d ?? '—')}
+                />
+              </div>
+            </Panel>
+            <Panel className="comparison-panel">
+              <SectionHeading
+                title="Marketplace comparison"
+                subtitle="Delivered prices; active asks separated from sold evidence"
+                action={
+                  <Button
+                    className="iron-button"
+                    variant="outline"
+                    onClick={() => void onTrack(selected.id)}
+                  >
+                    {trackedIds.has(selected.id) ? <Check /> : <Eye />}
+                    {trackedIds.has(selected.id) ? 'Tracked' : 'Watch product'}
+                  </Button>
+                }
               />
-            </svg>
-            <div className="chart-axis">
-              <span>12 weeks ago</span>
-              <span>Today</span>
-            </div>
-            <div className="market-stat-row">
-              <EconomicMetric
-                label="25th percentile"
-                value={money(selected.economics.expectedSalePrice * 0.92)}
-              />
-              <EconomicMetric
-                label="Weighted median"
-                value={money(selected.economics.expectedSalePrice)}
-              />
-              <EconomicMetric
-                label="75th percentile"
-                value={money(selected.economics.expectedSalePrice * 1.08)}
-              />
-              <EconomicMetric
-                label="Sold 30d"
-                value={String(selected.soldCount30d ?? '—')}
-              />
-            </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Evidence</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Delivered</TableHead>
+                    <TableHead>Freshness</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <ComparisonRow
+                    source={selected.source}
+                    type="Observed active ask"
+                    item={selected.economics.itemPrice}
+                    delivered={selected.economics.allInCost}
+                    age={dealAgeLabel(selected)}
+                    status="Available"
+                  />
+                  <ComparisonRow
+                    source="TCG Scout model"
+                    type="Modelled exit after fees and reserves"
+                    item={selected.economics.expectedSalePrice}
+                    delivered={selected.economics.conservativeNetExit}
+                    age="Scenario"
+                    status="Modelled"
+                  />
+                </TableBody>
+              </Table>
+            </Panel>
+          </div>
+        ) : (
+          <Panel className="empty-state market-empty-detail">
+            <Search />
+            <h2>No evidence panel selected</h2>
+            <p>
+              Refine the canonical product, set, game or listing ID. Existing
+              details were cleared when the search returned no match.
+            </p>
           </Panel>
-          <Panel className="comparison-panel">
-            <SectionHeading
-              title="Marketplace comparison"
-              subtitle="Delivered prices; active asks separated from sold evidence"
-              action={
-                <Button
-                  className="iron-button"
-                  variant="outline"
-                  onClick={() => void onTrack(selected.id)}
-                >
-                  {trackedIds.has(selected.id) ? <Check /> : <Eye />}
-                  {trackedIds.has(selected.id) ? 'Tracked' : 'Watch product'}
-                </Button>
-              }
-            />
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Evidence</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Delivered</TableHead>
-                  <TableHead>Freshness</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <ComparisonRow
-                  source="Cardmarket"
-                  type="Fictional demonstration transaction cohort"
-                  item={selected.economics.expectedSalePrice - 3}
-                  delivered={selected.economics.expectedSalePrice - 3}
-                  age="2h"
-                  status="Evidence"
-                />
-                <ComparisonRow
-                  source={selected.source}
-                  type="Active listing"
-                  item={selected.economics.itemPrice}
-                  delivered={selected.economics.allInCost}
-                  age={selected.listingAge}
-                  status="Available"
-                />
-                <ComparisonRow
-                  source="eBay NL"
-                  type="Active asking"
-                  item={selected.economics.expectedSalePrice + 12}
-                  delivered={selected.economics.expectedSalePrice + 19}
-                  age="41m"
-                  status="Available"
-                />
-              </TableBody>
-            </Table>
-          </Panel>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -3038,7 +3381,13 @@ function ComparisonRow({
   );
 }
 
-function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
+function ReleasesPage({
+  initialReleaseId,
+  onNotice,
+}: {
+  initialReleaseId?: string;
+  onNotice: (text: string) => void;
+}) {
   const [view, setView] = useState('timeline');
   const [gameFilter, setGameFilter] = useState('all');
   const [scopeFilter, setScopeFilter] = useState('eu');
@@ -3050,12 +3399,29 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
           .map((release) => release.id),
       ),
   );
-  const filteredReleases = releases.filter(
-    (release) =>
-      (gameFilter === 'all' || release.game.toLowerCase() === gameFilter) &&
-      (scopeFilter !== 'official' || release.official) &&
-      (scopeFilter !== 'watched' || watchedReleaseIds.has(release.id)),
+  const filteredReleases = sortReleasesChronologically(
+    releases.filter(
+      (release) =>
+        (gameFilter === 'all' ||
+          normalizeIdentity(release.game) === gameFilter) &&
+        (scopeFilter !== 'official' || release.official) &&
+        (scopeFilter !== 'watched' || watchedReleaseIds.has(release.id)),
+    ),
   );
+  const toggleReleaseWatch = (release: (typeof releases)[number]) => {
+    const wasWatched = watchedReleaseIds.has(release.id);
+    setWatchedReleaseIds((current) => {
+      const next = new Set(current);
+      if (wasWatched) next.delete(release.id);
+      else next.add(release.id);
+      return next;
+    });
+    onNotice(
+      wasWatched
+        ? `${release.name} was removed from this session's release watch.`
+        : `${release.name} is now watched for this session.`,
+    );
+  };
   return (
     <div className="page-stack">
       <Panel className="filter-bar release-filters">
@@ -3073,8 +3439,12 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
           value={gameFilter}
           onValueChange={(value) => setGameFilter(value ?? 'all')}
         >
-          <SelectTrigger>
-            <SelectValue />
+          <SelectTrigger aria-label="Filter releases by game">
+            <SelectValue>
+              {{ all: 'All games', pokemon: 'Pokémon', riftbound: 'Riftbound' }[
+                gameFilter
+              ] ?? 'All games'}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All games</SelectItem>
@@ -3086,8 +3456,14 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
           value={scopeFilter}
           onValueChange={(value) => setScopeFilter(value ?? 'eu')}
         >
-          <SelectTrigger>
-            <SelectValue />
+          <SelectTrigger aria-label="Filter releases by scope">
+            <SelectValue>
+              {{
+                eu: 'Europe',
+                official: 'Official only',
+                watched: 'Watched only',
+              }[scopeFilter] ?? 'Europe'}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="eu">Europe</SelectItem>
@@ -3096,12 +3472,26 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
           </SelectContent>
         </Select>
       </Panel>
-      {view === 'timeline' ? (
+      {filteredReleases.length === 0 ? (
+        <Panel className="empty-state">
+          <CalendarDays />
+          <h2>No releases match these filters</h2>
+          <p>Try another game or include releases that are not watched yet.</p>
+        </Panel>
+      ) : view === 'timeline' ? (
         <div className="release-timeline" data-release-view="timeline">
           {filteredReleases.map((release, index) => (
-            <div className="timeline-entry" key={release.id}>
+            <div
+              className={cn(
+                'timeline-entry',
+                initialReleaseId === release.id && 'highlighted',
+              )}
+              key={release.id}
+            >
               <div className="timeline-marker">
-                <span>{release.daysAway}</span>
+                <span>
+                  {Math.max(0, daysUntilRelease(release.releaseDate) ?? 0)}
+                </span>
               </div>
               <Panel className="timeline-card">
                 <div className="timeline-main">
@@ -3136,16 +3526,13 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
                 <Button
                   className="iron-button"
                   variant="outline"
-                  onClick={() => {
-                    setWatchedReleaseIds((current) =>
-                      new Set(current).add(release.id),
-                    );
-                    onNotice(
-                      `${release.name} is now watched for this session.`,
-                    );
-                  }}
+                  aria-pressed={watchedReleaseIds.has(release.id)}
+                  onClick={() => toggleReleaseWatch(release)}
                 >
-                  <Eye /> Watch release
+                  {watchedReleaseIds.has(release.id) ? <Check /> : <Eye />}
+                  {watchedReleaseIds.has(release.id)
+                    ? 'Watching release'
+                    : 'Watch release'}
                 </Button>
               </Panel>
               {index < filteredReleases.length - 1 && (
@@ -3157,7 +3544,7 @@ function ReleasesPage({ onNotice }: { onNotice: (text: string) => void }) {
       ) : view === 'calendar' ? (
         <Panel className="release-strip" data-release-view="calendar">
           <SectionHeading
-            title="Release calendar"
+            title="Release date cards"
             subtitle="Upcoming dates in chronological order"
           />
           <div className="release-grid">
@@ -3239,8 +3626,8 @@ function ScannerPage({
         <div className="scanner-privacy">
           <ShieldAlert />
           <span>
-            Uploads require MIME and file-signature validation in live mode.
-            Demo files remain device-local.
+            A future live scanner must verify that an upload is a genuine image
+            before reading it. This demo does not upload or inspect any file.
           </span>
         </div>
       </Panel>
@@ -3267,7 +3654,7 @@ function ScannerPage({
               <Button
                 className="gold-button"
                 onClick={() => {
-                  window.location.href = '/market';
+                  window.location.href = `/market?dealId=${encodeURIComponent(demoDeal.id)}`;
                 }}
               >
                 Compare market
@@ -3280,7 +3667,7 @@ function ScannerPage({
                   onNotice('Simulated candidate cleared.');
                 }}
               >
-                Correct match
+                Clear demo candidate
               </Button>
             </div>
           </>
@@ -3289,8 +3676,8 @@ function ScannerPage({
             <Eye />
             <h2>No scan yet</h2>
             <p>
-              A candidate identity, confidence and correction controls will
-              appear here.
+              A predetermined demo candidate will appear here. Real image
+              recognition and correction are not enabled.
             </p>
           </div>
         )}
@@ -3311,6 +3698,7 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
     }[]
   >([]);
   const [portfolioBusy, setPortfolioBusy] = useState(false);
+  const [purchaseDealId, setPurchaseDealId] = useState(deals[0]?.id ?? '');
   const [purchaseQuantity, setPurchaseQuantity] = useState(1);
   const [purchaseItemPrice, setPurchaseItemPrice] = useState(
     deals[0]?.economics.itemPrice ?? 0,
@@ -3336,44 +3724,26 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
     const timeout = window.setTimeout(() => void loadInventory(), 0);
     return () => window.clearTimeout(timeout);
   }, []);
-  const holdings = [
-    {
-      name: 'Prismatic Evolutions ETB',
-      qty: 6,
-      basis: 361.2,
-      liquidation: 414,
-      patient: 468,
-      days: 41,
-      status: 'Healthy',
-    },
-    {
-      name: 'Riftbound Origins display',
-      qty: 4,
-      basis: 596,
-      liquidation: 544,
-      patient: 628,
-      days: 67,
-      status: 'Below basis',
-    },
-    {
-      name: 'Scarlet & Violet—151 bundle',
-      qty: 8,
-      basis: 408,
-      liquidation: 521.6,
-      patient: 584,
-      days: 83,
-      status: 'Healthy',
-    },
-    {
-      name: 'Mixed singles inventory',
-      qty: 73,
-      basis: 384,
-      liquidation: 286,
-      patient: 417,
-      days: 119,
-      status: 'Dead stock',
-    },
-  ];
+  const holdings = DEMO_PORTFOLIO_HOLDINGS;
+  const portfolio = summarizeDemoPortfolio();
+  const gameExposure = portfolioExposure(holdings, 'game');
+  const strategyExposure = portfolioExposure(holdings, 'strategy');
+  const selectedPurchaseDeal =
+    deals.find((deal) => deal.id === purchaseDealId) ?? null;
+  const purchaseValid =
+    Boolean(selectedPurchaseDeal) &&
+    Number.isInteger(purchaseQuantity) &&
+    purchaseQuantity >= 1 &&
+    Number.isFinite(purchaseItemPrice) &&
+    purchaseItemPrice >= 0 &&
+    Number.isFinite(purchaseCosts) &&
+    purchaseCosts >= 0;
+  const saleValid =
+    Boolean(saleLotId) &&
+    Number.isFinite(saleGross) &&
+    saleGross >= 0 &&
+    Number.isFinite(saleCosts) &&
+    saleCosts >= 0;
   return (
     <div className="page-stack">
       <div className="metric-grid vault-metrics">
@@ -3381,42 +3751,42 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
           icon={HandCoins}
           label="Cash invested"
           value={money(portfolio.cashInvested)}
-          detail="all-in basis"
+          detail="4 displayed fictional open lots"
           tone="gold"
         />
         <MetricPlaque
           icon={Vault}
           label="Patient-sale value"
           value={money(portfolio.patientSaleValue)}
-          detail="modelled, not realised"
+          detail="4 displayed lots · modelled"
           tone="blue"
         />
         <MetricPlaque
           icon={Scale}
           label="Conservative cash-out"
           value={money(portfolio.conservativeLiquidationValue)}
-          detail="after exit costs"
+          detail="4 displayed lots · after exit costs"
           tone="green"
         />
         <MetricPlaque
           icon={TrendingUp}
           label="Realised profit"
           value={money(portfolio.realisedProfit)}
-          detail="completed sales only"
+          detail="2 displayed fictional closed sales"
           tone="green"
         />
         <MetricPlaque
           icon={Clock3}
           label="Average holding"
           value={`${portfolio.averageHoldingDays}d`}
-          detail="sold and open lots"
+          detail="4 displayed open lots"
           tone="violet"
         />
         <MetricPlaque
           icon={AlertTriangle}
           label="Dead inventory"
           value={money(portfolio.deadInventory)}
-          detail="no sale evidence 90d+"
+          detail="basis of displayed 90d+ lot"
           tone="amber"
         />
       </div>
@@ -3444,6 +3814,11 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
               </div>
             }
           />
+          <p className="scope-note">
+            Headline values reconcile to the four fictional open lots below.
+            Account-saved demo lots remain separate until cash-out evidence is
+            recorded.
+          </p>
           <Table>
             <TableHeader>
               <TableRow>
@@ -3507,13 +3882,23 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
         </Panel>
         <Panel className="exposure-panel">
           <SectionHeading title="Exposure" subtitle="By game and strategy" />
-          <ExposureBar label="Pokémon" value={68} amount="€1,461" />
-          <ExposureBar label="Riftbound" value={28} amount="€602" />
-          <ExposureBar label="Other / cash" value={4} amount="€85" />
+          {gameExposure.map((entry) => (
+            <ExposureBar
+              key={entry.label}
+              label={entry.label}
+              value={entry.percentage}
+              amount={money(entry.amount)}
+            />
+          ))}
           <RuneDivider />
-          <ExposureBar label="Quick flip" value={41} amount="€881" />
-          <ExposureBar label="Long-term sealed" value={37} amount="€795" />
-          <ExposureBar label="Singles" value={22} amount="€472" />
+          {strategyExposure.map((entry) => (
+            <ExposureBar
+              key={entry.label}
+              label={entry.label}
+              value={entry.percentage}
+              amount={money(entry.amount)}
+            />
+          ))}
           <div className="tax-note">
             <Info />
             <span>
@@ -3535,32 +3920,65 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
           <strong className="mono">{money(portfolio.unrealisedResult)}</strong>
         </div>
         <p>
-          Estimated values are never labelled as realised profit. One completed
-          demo sale was profitable and one was loss-making; both remain visible.
+          Estimated values are never labelled as realised profit. The two
+          fictional completed-sale rows below reconcile to this fixture total.
         </p>
+        <div className="completed-sale-ledger">
+          {DEMO_COMPLETED_SALES.map((sale) => (
+            <div key={sale.id}>
+              <span>{sale.name}</span>
+              <small>
+                Gross {money(sale.grossProceeds)} · costs{' '}
+                {money(sale.sellingCosts)} · basis {money(sale.basis)}
+              </small>
+              <strong
+                className={cn(
+                  'mono',
+                  completedSaleProfit(sale) >= 0 ? 'positive' : 'negative',
+                )}
+              >
+                {money(completedSaleProfit(sale))}
+              </strong>
+            </div>
+          ))}
+        </div>
         <Button
           variant="outline"
           className="iron-button"
           onClick={() => {
-            const rows = [
-              ['Lot', 'Quantity', 'All-in basis'],
-              ...holdings.map((item) => [item.name, item.qty, item.basis]),
-              ...inventoryLots.map((item) => [
-                item.name,
-                item.remainingQuantity,
-                item.allInBasis,
-              ]),
-            ];
-            const csv = rows.map((row) => row.join(',')).join('\n');
+            const csv = buildPortfolioCsv([
+              ...holdings.map((item) => ({
+                product: item.name,
+                quantity: item.qty,
+                costBasis: item.basis,
+                cashOutNet: item.liquidation,
+                patientNet: item.patient,
+                status: item.status,
+                dataMode: 'demo' as const,
+              })),
+              ...inventoryLots.map((item) => ({
+                product: item.name,
+                quantity: item.remainingQuantity,
+                costBasis: item.allInBasis,
+                cashOutNet: null,
+                patientNet: null,
+                status: 'Awaiting valuation evidence',
+                dataMode: 'demo' as const,
+              })),
+            ]);
             const url = URL.createObjectURL(
               new Blob([csv], { type: 'text/csv;charset=utf-8' }),
             );
             const link = document.createElement('a');
             link.href = url;
             link.download = 'tcg-scout-accounting.csv';
+            document.body.appendChild(link);
             link.click();
-            URL.revokeObjectURL(url);
-            onNotice('Accounting CSV exported.');
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+            onNotice(
+              'Accounting CSV download started with the displayed fixture lots and any separate account-saved demo lots.',
+            );
           }}
         >
           Export accounting CSV
@@ -3575,11 +3993,43 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
             </DialogDescription>
           </DialogHeader>
           <label>
+            <span>Canonical product</span>
+            <Select
+              value={purchaseDealId}
+              onValueChange={(value) => {
+                if (!value) return;
+                const deal = deals.find((item) => item.id === value);
+                setPurchaseDealId(value);
+                if (deal) {
+                  setPurchaseItemPrice(deal.economics.itemPrice);
+                  setPurchaseCosts(deal.economics.nonItemAcquisitionCosts);
+                }
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue>
+                  {selectedPurchaseDeal?.canonicalProduct ?? 'Choose a product'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {deals.map((deal) => (
+                  <SelectItem key={deal.id} value={deal.id}>
+                    {deal.canonicalProduct} · {deal.set}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label>
             <span>Quantity</span>
             <Input
               type="number"
               min="1"
+              step="1"
               value={purchaseQuantity}
+              aria-invalid={
+                !Number.isInteger(purchaseQuantity) || purchaseQuantity < 1
+              }
               onChange={(event) =>
                 setPurchaseQuantity(Number(event.target.value))
               }
@@ -3589,7 +4039,9 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
             <span>Item price</span>
             <Input
               type="number"
+              min="0"
               value={purchaseItemPrice}
+              aria-invalid={purchaseItemPrice < 0}
               onChange={(event) =>
                 setPurchaseItemPrice(Number(event.target.value))
               }
@@ -3599,14 +4051,16 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
             <span>Acquisition costs</span>
             <Input
               type="number"
+              min="0"
               value={purchaseCosts}
+              aria-invalid={purchaseCosts < 0}
               onChange={(event) => setPurchaseCosts(Number(event.target.value))}
             />
           </label>
           <DialogFooter>
             <Button
               className="gold-button"
-              disabled={portfolioBusy}
+              disabled={portfolioBusy || !purchaseValid}
               onClick={async () => {
                 setPortfolioBusy(true);
                 try {
@@ -3614,7 +4068,7 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      dealId: deals[0]?.id,
+                      dealId: selectedPurchaseDeal?.id,
                       quantity: purchaseQuantity,
                       itemPrice: purchaseItemPrice,
                       acquisitionCosts: purchaseCosts,
@@ -3658,7 +4112,10 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
               onValueChange={(value) => setSaleLotId(value ?? '')}
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>
+                  {inventoryLots.find((lot) => lot.id === saleLotId)?.name ??
+                    'Choose an inventory lot'}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {inventoryLots.map((lot) => (
@@ -3673,7 +4130,9 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
             <span>Gross proceeds</span>
             <Input
               type="number"
+              min="0"
               value={saleGross}
+              aria-invalid={saleGross < 0}
               onChange={(event) => setSaleGross(Number(event.target.value))}
             />
           </label>
@@ -3681,14 +4140,16 @@ function PortfolioPage({ onNotice }: { onNotice: (text: string) => void }) {
             <span>Selling costs</span>
             <Input
               type="number"
+              min="0"
               value={saleCosts}
+              aria-invalid={saleCosts < 0}
               onChange={(event) => setSaleCosts(Number(event.target.value))}
             />
           </label>
           <DialogFooter>
             <Button
               className="gold-button"
-              disabled={portfolioBusy || !saleLotId}
+              disabled={portfolioBusy || !saleValid}
               onClick={async () => {
                 setPortfolioBusy(true);
                 try {
@@ -3771,7 +4232,8 @@ function WatchlistPage({
       <Panel className="watch-command">
         <div>
           <span className="panel-kicker">
-            <Telescope /> 6 active rules
+            <Telescope /> {watched.length} tracked product
+            {watched.length === 1 ? '' : 's'} · 1 shared purchase gate
           </span>
           <h2>Products moving toward your buy price</h2>
           <p>
@@ -3785,81 +4247,108 @@ function WatchlistPage({
             window.location.href = '/alerts';
           }}
         >
-          Create watch rule
+          Configure shared alert gates
         </Button>
       </Panel>
       <div className="watchlist-grid">
-        {watched.map((item) => (
-          <Panel
-            className="watch-product"
-            data-economics-surface="watchtower"
-            data-deal-id={item.id}
-            key={item.id}
-          >
-            <div className="watch-product-top">
-              <ProductGlyph deal={item} compact />
-              <div>
-                <h3>{item.canonicalProduct}</h3>
-                <p>
-                  {item.source} · {item.location}
-                </p>
-              </div>
-              <Badge
-                className={
-                  allInCostWithinMaximum(item.economics)
-                    ? 'positive-badge'
-                    : 'warning-badge'
-                }
+        {watched.length ? (
+          watched.map((item) => {
+            const percentageAboveTarget =
+              item.economics.maximumAllInCost > 0
+                ? ((item.economics.allInCost -
+                    item.economics.maximumAllInCost) /
+                    item.economics.maximumAllInCost) *
+                  100
+                : null;
+            return (
+              <Panel
+                className="watch-product"
+                data-economics-surface="watchtower"
+                data-deal-id={item.id}
+                key={item.id}
               >
-                {allInCostWithinMaximum(item.economics)
-                  ? 'Below target'
-                  : 'Near target'}
-              </Badge>
-            </div>
-            <div className="target-line">
-              <span>
-                All-in now{' '}
-                <b className="mono">{money(item.economics.allInCost)}</b>
-              </span>
-              <Progress
-                value={Math.min(
-                  100,
-                  (item.economics.maximumAllInCost / item.economics.allInCost) *
-                    100,
-                )}
-              />
-              <span>
-                Max all-in{' '}
-                <b className="mono">{money(item.economics.maximumAllInCost)}</b>
-              </span>
-            </div>
-            <div className="card-actions">
-              <Button className="gold-button" onClick={() => onInspect(item)}>
-                Inspect
-              </Button>
-              <Button
-                variant="outline"
-                className="iron-button"
-                onClick={() => void onTrack(item.id)}
-              >
-                Remove
-              </Button>
-              <Button
-                variant="outline"
-                className="iron-button"
-                disabled={recheckingIds.has(item.id)}
-                onClick={() => onOpenListing(item)}
-              >
-                {recheckingIds.has(item.id) ? (
-                  <RefreshCw className="spin" />
-                ) : (
-                  <ExternalLink />
-                )}
-                {recheckingIds.has(item.id) ? 'Rechecking…' : 'Open listing'}
-              </Button>
-            </div>
+                <div className="watch-product-top">
+                  <ProductGlyph deal={item} compact />
+                  <div>
+                    <h3>{item.canonicalProduct}</h3>
+                    <p>
+                      {item.source} · {item.location}
+                    </p>
+                  </div>
+                  <Badge
+                    className={
+                      allInCostWithinMaximum(item.economics)
+                        ? 'positive-badge'
+                        : 'warning-badge'
+                    }
+                  >
+                    {allInCostWithinMaximum(item.economics)
+                      ? 'Below target'
+                      : percentageAboveTarget === null
+                        ? 'Target unavailable'
+                        : `${Math.abs(percentageAboveTarget).toFixed(1)}% above target`}
+                  </Badge>
+                </div>
+                <div className="target-line">
+                  <span>
+                    All-in now{' '}
+                    <b className="mono">{money(item.economics.allInCost)}</b>
+                  </span>
+                  <Progress
+                    value={Math.min(
+                      100,
+                      (item.economics.maximumAllInCost /
+                        item.economics.allInCost) *
+                        100,
+                    )}
+                  />
+                  <span>
+                    Max all-in{' '}
+                    <b className="mono">
+                      {money(item.economics.maximumAllInCost)}
+                    </b>
+                  </span>
+                </div>
+                <div className="card-actions">
+                  <Button
+                    className="gold-button"
+                    onClick={() => onInspect(item)}
+                  >
+                    Inspect
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="iron-button"
+                    onClick={() => void onTrack(item.id)}
+                  >
+                    Remove
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="iron-button"
+                    disabled={recheckingIds.has(item.id)}
+                    onClick={() => onOpenListing(item)}
+                  >
+                    {recheckingIds.has(item.id) ? (
+                      <RefreshCw className="spin" />
+                    ) : (
+                      <ExternalLink />
+                    )}
+                    {recheckingIds.has(item.id)
+                      ? 'Rechecking…'
+                      : 'Open listing'}
+                  </Button>
+                </div>
+              </Panel>
+            );
+          })
+        ) : (
+          <Panel className="empty-state">
+            <Telescope />
+            <h2>No products are tracked</h2>
+            <p>Use Watch product on a deal or market record to add one.</p>
           </Panel>
-        ))}
+        )}
       </div>
       <Panel>
         <SectionHeading
@@ -3870,7 +4359,7 @@ function WatchlistPage({
           deal={watched[0] ?? records[0] ?? null}
           tone="critical"
           title="Critical · all-in below maximum buy"
-          time="11m"
+          time="Fixture event 1"
           onOpenListing={onOpenListing}
           rechecking={Boolean(
             (watched[0] ?? records[0]) &&
@@ -3881,8 +4370,8 @@ function WatchlistPage({
           deal={records[1] ?? null}
           tone="positive"
           title="New sold evidence"
-          detail="Destined Rivals · 3 comparable transactions"
-          time="47m"
+          detail="Fictional Destined Rivals completed-sale cohort · 3 records"
+          time="Fixture event 2"
           onOpenListing={onOpenListing}
           rechecking={Boolean(records[1] && recheckingIds.has(records[1].id))}
         />
@@ -3891,7 +4380,7 @@ function WatchlistPage({
           tone="warning"
           title="Price changed after alert"
           detail="Origins display no longer profitable after fees"
-          time="2h"
+          time="Fixture event 3"
           onOpenListing={onOpenListing}
           rechecking={Boolean(records[2] && recheckingIds.has(records[2].id))}
         />
@@ -4040,14 +4529,14 @@ function CalibrationBar({ label, value }: { label: string; value: number }) {
 }
 
 function AlertsPage({
-  deal,
+  deals: records,
   onInspect,
   onNotice,
   onOpenListing,
   recheckingIds,
   userSignedIn,
 }: {
-  deal: Deal | null;
+  deals: Deal[];
   onInspect: (deal: Deal) => void;
   onNotice: (text: string) => void;
   onOpenListing: (deal: Deal) => void;
@@ -4071,6 +4560,20 @@ function AlertsPage({
     QUICK_FLIP_GATE.maximumHoldingDays,
   );
   const [savingRules, setSavingRules] = useState(false);
+  const primaryDeal = records[0] ?? null;
+  const destinedRivalsDeal =
+    records.find((item) =>
+      normalizeIdentity(item.canonicalProduct).includes('destined rivals'),
+    ) ?? null;
+  const alertErrors = validateAlertRule({
+    matchConfidence: critical,
+    minimumProfit,
+    minimumRoi: minimumRoi / 100,
+    minimumProfitPerHour,
+    maximumHoldingDays,
+    maximumRiskScore: QUICK_FLIP_GATE.maximumRiskScore,
+  });
+  const alertRulesValid = Object.keys(alertErrors).length === 0;
   useEffect(() => {
     if (!userSignedIn) return;
     void fetch('/api/alert-rules')
@@ -4098,6 +4601,10 @@ function AlertsPage({
       });
   }, [userSignedIn]);
   const saveRules = async () => {
+    if (!alertRulesValid) {
+      onNotice('Correct the highlighted purchase gates before saving.');
+      return;
+    }
     if (!userSignedIn) {
       onNotice('Sign in with ChatGPT before saving alert rules.');
       return;
@@ -4136,7 +4643,7 @@ function AlertsPage({
           action={
             <Button
               className="gold-button"
-              disabled={savingRules}
+              disabled={savingRules || !alertRulesValid}
               onClick={() => void saveRules()}
             >
               {savingRules ? 'Saving…' : 'Save rules'}
@@ -4149,48 +4656,78 @@ function AlertsPage({
             <div className="rule-input">
               <Input
                 type="number"
+                min="0"
+                max="100"
                 value={critical}
+                aria-invalid={Boolean(alertErrors.matchConfidence)}
                 onChange={(event) => setCritical(Number(event.target.value))}
               />
               <b>% minimum</b>
             </div>
+            {alertErrors.matchConfidence ? (
+              <small className="field-error">
+                {alertErrors.matchConfidence}
+              </small>
+            ) : null}
           </label>
           <label>
             <span>Net profit</span>
             <div className="rule-input">
               <Input
                 type="number"
+                min="0"
+                max="100000"
                 value={minimumProfit}
+                aria-invalid={Boolean(alertErrors.minimumProfit)}
                 onChange={(event) =>
                   setMinimumProfit(Number(event.target.value))
                 }
               />
               <b>EUR minimum</b>
             </div>
+            {alertErrors.minimumProfit ? (
+              <small className="field-error">{alertErrors.minimumProfit}</small>
+            ) : null}
           </label>
           <label>
             <span>ROI</span>
             <div className="rule-input">
               <Input
                 type="number"
+                min="0"
+                max="500"
                 value={minimumRoi}
+                aria-invalid={Boolean(alertErrors.minimumRoi)}
                 onChange={(event) => setMinimumRoi(Number(event.target.value))}
               />
               <b>% minimum</b>
             </div>
+            {alertErrors.minimumRoi ? (
+              <small className="field-error">
+                Enter an ROI from 0% to 500%.
+              </small>
+            ) : null}
           </label>
           <label>
             <span>Profit per hour</span>
             <div className="rule-input">
               <Input
                 type="number"
+                min="0"
+                max="100000"
                 value={minimumProfitPerHour}
+                aria-invalid={Boolean(alertErrors.minimumProfitPerHour)}
                 onChange={(event) =>
                   setMinimumProfitPerHour(Number(event.target.value))
                 }
               />
               <b>EUR minimum</b>
             </div>
+            {alertErrors.minimumProfitPerHour ? (
+              <small className="field-error">
+                {alertErrors.minimumProfitPerHour}
+              </small>
+            ) : null}
           </label>
           <label>
             <span>Confidence grade</span>
@@ -4199,7 +4736,11 @@ function AlertsPage({
               onValueChange={(value) => setMinimumGrade(value ?? 'B')}
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>
+                  {{ A: 'A only', B: 'B or better', C: 'C or better' }[
+                    minimumGrade
+                  ] ?? minimumGrade}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="A">A only</SelectItem>
@@ -4217,7 +4758,7 @@ function AlertsPage({
               }
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>{maximumHoldingDays} days</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="30">30 days</SelectItem>
@@ -4227,17 +4768,23 @@ function AlertsPage({
             </Select>
           </label>
         </div>
-        <div className="logic-strip">
-          <span>Match ≥ {critical}%</span>
-          <b>AND</b>
-          <span>Profit ≥ {money(minimumProfit)}</span>
-          <b>AND</b>
-          <span>ROI ≥ {minimumRoi}%</span>
-          <b>AND</b>
-          <span>Grade ≥ {minimumGrade}</span>
-          <b>AND</b>
-          <span>Risk ≤ {QUICK_FLIP_GATE.maximumRiskScore}</span>
-        </div>
+        {alertRulesValid ? (
+          <div className="logic-strip">
+            <span>Match ≥ {critical}%</span>
+            <b>AND</b>
+            <span>Profit ≥ {money(minimumProfit)}</span>
+            <b>AND</b>
+            <span>ROI ≥ {minimumRoi}%</span>
+            <b>AND</b>
+            <span>Grade ≥ {minimumGrade}</span>
+            <b>AND</b>
+            <span>Risk ≤ {QUICK_FLIP_GATE.maximumRiskScore}</span>
+          </div>
+        ) : (
+          <div className="logic-strip invalid" role="alert">
+            Preview withheld until every purchase gate is within range.
+          </div>
+        )}
       </Panel>
       <div className="alerts-layout">
         <Panel>
@@ -4246,33 +4793,37 @@ function AlertsPage({
             subtitle="Fictional demonstration feed · 3 visible"
           />
           <div className="alert-feed">
-            {deal ? (
+            {primaryDeal ? (
               <AlertItem
-                deal={deal}
+                deal={primaryDeal}
                 priority="Critical"
-                title={`${deal.canonicalProduct} below maximum all-in`}
-                time="11m"
-                onOpen={() => onInspect(deal)}
-                onOpenListing={() => onOpenListing(deal)}
-                rechecking={recheckingIds.has(deal.id)}
+                title={`${primaryDeal.canonicalProduct} below maximum all-in`}
+                time="Fixture event 1"
+                onOpen={() => onInspect(primaryDeal)}
+                onOpenListing={() => onOpenListing(primaryDeal)}
+                rechecking={recheckingIds.has(primaryDeal.id)}
               />
             ) : null}
             <AlertItem
               priority="High"
               title="Destined Rivals price cut"
               detail="Recheck required before action · exit eBay NL"
-              time="37m"
+              deal={destinedRivalsDeal ?? undefined}
+              time="Fixture event 2"
               onOpen={() => {
-                window.location.href = '/deals';
+                if (destinedRivalsDeal) onInspect(destinedRivalsDeal);
+                else
+                  onNotice('The linked Destined Rivals record is unavailable.');
               }}
             />
             <AlertItem
               priority="Medium"
               title="Official Spiritforged preorder open"
               detail="7 retailers · €129–€159 · high interest"
-              time="3h"
+              time="Fixture event 3"
               onOpen={() => {
-                window.location.href = '/releases';
+                window.location.href =
+                  '/releases?releaseId=riftbound-spiritforged';
               }}
             />
           </div>
@@ -4290,7 +4841,7 @@ function AlertsPage({
             <span>Per-listing cooldown</span>
             <Select defaultValue="60">
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>1 hour</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="30">30 minutes</SelectItem>
@@ -4303,18 +4854,21 @@ function AlertsPage({
             <span>Critical delivery</span>
             <Select defaultValue="app">
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>In app</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="app">In app</SelectItem>
-                <SelectItem value="email">In app + email</SelectItem>
               </SelectContent>
             </Select>
           </label>
           <Button
             variant="outline"
             className="iron-button"
-            onClick={() => onNotice('Test alert delivered in app.')}
+            onClick={() =>
+              onNotice(
+                'Demo alert preview shown in this page; no notification was sent.',
+              )
+            }
           >
             Send test alert
           </Button>
@@ -4361,26 +4915,124 @@ function AlertItem({
         <p>{derivedDetail}</p>
       </div>
       <time>{time}</time>
-      <Button variant="outline" className="iron-button" onClick={onOpen}>
-        Open
-      </Button>
-      {deal && onOpenListing ? (
-        <Button
-          variant="outline"
-          className="iron-button"
-          disabled={rechecking}
-          onClick={onOpenListing}
-        >
-          {rechecking ? <RefreshCw className="spin" /> : <ExternalLink />}
-          {rechecking ? 'Rechecking…' : 'Open listing'}
+      <div className="alert-actions">
+        <Button variant="outline" className="iron-button" onClick={onOpen}>
+          Open
         </Button>
-      ) : null}
+        {deal && onOpenListing ? (
+          <Button
+            variant="outline"
+            className="iron-button"
+            disabled={rechecking}
+            onClick={onOpenListing}
+          >
+            {rechecking ? <RefreshCw className="spin" /> : <ExternalLink />}
+            {rechecking ? 'Rechecking…' : 'Open listing'}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
+const sourceSetupGuidance: Record<
+  string,
+  { title: string; summary: string; steps: string[]; operatorOnly: boolean }
+> = {
+  'fixture-market': {
+    title: 'Isolated Demo Marketplace',
+    summary:
+      'No setup is required. This source makes no network requests and keeps fictional records isolated.',
+    steps: ['Use Test connection to verify the bundled fixture adapter.'],
+    operatorOnly: false,
+  },
+  ebay: {
+    title: 'eBay Browse API',
+    summary:
+      'The public browser never accepts or reveals eBay secrets. A deployment operator must configure official API credentials.',
+    steps: [
+      'Create an application in the eBay Developer Program.',
+      'Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in the private hosting environment.',
+      'Set EBAY_MARKETPLACE when a marketplace other than EBAY_NL is required.',
+      'Redeploy, then return here and run Test connection.',
+    ],
+    operatorOnly: true,
+  },
+  cardmarket: {
+    title: 'Cardmarket public reference data',
+    summary:
+      'This connector needs Cardmarket-authorized catalogue and price-guide download URLs. It is reference data, not live sold evidence.',
+    steps: [
+      'Obtain authorized catalogue and price-guide access from Cardmarket.',
+      'Add the approved URLs to the private server environment.',
+      'Redeploy and test the connector; no HTML scraping fallback is used.',
+    ],
+    operatorOnly: true,
+  },
+  retailers: {
+    title: 'Retailer Watch adapters',
+    summary:
+      'No retailer adapter is installed. Each retailer requires documented API/feed permission and an allowlisted adapter.',
+    steps: [
+      'Choose a retailer that provides an authorized API or product feed.',
+      'Implement and review its source-specific adapter and rate limits.',
+      'Enable it server-side only after access and compliance are verified.',
+    ],
+    operatorOnly: true,
+  },
+  'amazon-keepa': {
+    title: 'Keepa for Amazon Scout',
+    summary:
+      'Keepa is the supported Amazon data provider. Amazon HTML scraping is never used as a fallback.',
+    steps: [
+      'Create a Keepa API plan and copy the API key.',
+      'Set KEEPA_API_KEY in the private hosting environment.',
+      'Redeploy, then verify token balance and authenticated scan status in Amazon Scout.',
+    ],
+    operatorOnly: true,
+  },
+  'marktplaats-public': {
+    title: 'Marktplaats Public Monitor',
+    summary:
+      'No credentials are required. The scheduled monitor is conservative and stops on blocks, challenges or parser changes.',
+    steps: [
+      'Review postcode and distance settings in the private deployment environment.',
+      'Wait for the scheduled scan, then use Refresh status in Marktplaats Scout.',
+      'If blocked, wait for the displayed retry; no bypass is attempted.',
+    ],
+    operatorOnly: true,
+  },
+};
+
+function readableSourceStatus(value: string) {
+  const labels: Record<string, string> = {
+    fixture: 'Fixture adapter ready',
+    configured: 'Configured',
+    credentials_required: 'Private API credentials required',
+    public_monitor: 'Public monitor configured',
+    official_api_not_configured: 'Official API not configured',
+    official_urls_required: 'Authorized catalogue URLs required',
+    existing_key_only: 'Existing developer access required',
+    authorized_adapter_required: 'Allowlisted adapter required',
+    healthy: 'Healthy',
+    key_required: 'Private API key required',
+  };
+  return labels[value] ?? value.replaceAll('_', ' ');
+}
+
+function SourcesPage({
+  initialConfigureId,
+  onNotice,
+}: {
+  initialConfigureId?: string;
+  onNotice: (text: string) => void;
+}) {
   const [testingSourceId, setTestingSourceId] = useState<string | null>(null);
+  const [configureId, setConfigureId] = useState<string | null>(
+    initialConfigureId && sourceSetupGuidance[initialConfigureId]
+      ? initialConfigureId
+      : null,
+  );
   const [marktplaatsSource, setMarktplaatsSource] =
     useState<MarktplaatsDashboard | null>(null);
   const [amazonSource, setAmazonSource] = useState<AmazonDashboard | null>(
@@ -4427,7 +5079,9 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
       };
       const result = {
         ok: Boolean(payload.ok),
-        status: payload.status ?? payload.error ?? `HTTP ${response.status}`,
+        status: readableSourceStatus(
+          payload.status ?? payload.error ?? `HTTP ${response.status}`,
+        ),
         checkedAt: payload.checkedAt ?? new Date().toISOString(),
       };
       setSourceResults((current) => ({ ...current, [sourceId]: result }));
@@ -4538,6 +5192,13 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
               Open Scout
             </NativeNavigationLink>
             <Button
+              variant="outline"
+              className="iron-button"
+              onClick={() => setConfigureId('marktplaats-public')}
+            >
+              Setup & recovery
+            </Button>
+            <Button
               className="gold-button"
               disabled={testingSourceId === 'marktplaats-public'}
               onClick={() =>
@@ -4626,6 +5287,13 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
             <NativeNavigationLink className="iron-link" href="/amazon">
               Open Amazon Scout
             </NativeNavigationLink>
+            <Button
+              variant="outline"
+              className="iron-button"
+              onClick={() => setConfigureId('amazon-keepa')}
+            >
+              Setup instructions
+            </Button>
           </div>
         </Panel>
         {sources
@@ -4691,11 +5359,11 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
                 <Button
                   variant="outline"
                   className="iron-button"
-                  onClick={() => {
-                    window.location.href = '/settings';
-                  }}
+                  onClick={() => setConfigureId(source.id)}
                 >
-                  Configure
+                  {source.id === 'fixture-market'
+                    ? 'About demo source'
+                    : 'Setup instructions'}
                 </Button>
                 <Button
                   className="gold-button"
@@ -4713,25 +5381,59 @@ function SourcesPage({ onNotice }: { onNotice: (text: string) => void }) {
             </Panel>
           ))}
       </div>
+      <Dialog
+        open={Boolean(configureId)}
+        onOpenChange={(open) => !open && setConfigureId(null)}
+      >
+        {configureId && sourceSetupGuidance[configureId] ? (
+          <DialogContent className="source-setup-dialog">
+            <DialogHeader>
+              <DialogTitle>
+                {sourceSetupGuidance[configureId].title}
+              </DialogTitle>
+              <DialogDescription>
+                {sourceSetupGuidance[configureId].summary}
+              </DialogDescription>
+            </DialogHeader>
+            <ol>
+              {sourceSetupGuidance[configureId].steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <div className="safety-note">
+              <ShieldAlert />
+              <span>
+                {sourceSetupGuidance[configureId].operatorOnly
+                  ? 'Operator-only setup: secrets and provider URLs stay in the private server environment.'
+                  : 'This fixture contains fictional data and is never production evidence.'}
+              </span>
+            </div>
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
 
 function ReviewPage({
+  initialSource,
   onNotice,
   userSignedIn,
 }: {
+  initialSource?: string;
   onNotice: (text: string) => void;
   userSignedIn: boolean;
 }) {
-  const [items, setItems] = useState<ReviewQueueItem[]>(() =>
-    userSignedIn ? [] : (fixtureReviewItems as ReviewQueueItem[]),
-  );
+  const [items, setItems] = useState<ReviewQueueItem[]>(() => [
+    ...(userSignedIn ? [] : (fixtureReviewItems as ReviewQueueItem[])),
+    ...(initialSource === 'lot-lab' ? demoLotReviewItems : []),
+  ]);
   const [loading, setLoading] = useState(userSignedIn);
   const [activeItem, setActiveItem] = useState<ReviewQueueItem | null>(null);
-  const [resolution, setResolution] = useState('accept_candidate');
+  const [resolution, setResolution] = useState('');
   const [candidate, setCandidate] = useState('');
   const [quantity, setQuantity] = useState('1');
+  const [parserValue, setParserValue] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -4743,7 +5445,11 @@ function ReviewPage({
         return (await response.json()) as { data: ReviewQueueItem[] };
       })
       .then((payload) => {
-        if (!cancelled) setItems(payload.data);
+        if (!cancelled)
+          setItems([
+            ...payload.data,
+            ...(initialSource === 'lot-lab' ? demoLotReviewItems : []),
+          ]);
       })
       .catch((error) => {
         if (!cancelled)
@@ -4757,17 +5463,53 @@ function ReviewPage({
     return () => {
       cancelled = true;
     };
-  }, [onNotice, userSignedIn]);
+  }, [initialSource, onNotice, userSignedIn]);
 
   const openReview = (item: ReviewQueueItem) => {
     setActiveItem(item);
-    setResolution('accept_candidate');
+    setResolution('');
     setCandidate(item.currentCandidate);
     setQuantity(String(item.quantity));
+    setParserValue(item.parsedValue ?? '');
   };
+
+  const candidateResolution = [
+    'accept_candidate',
+    'select_alternative',
+    'edit_fields',
+  ].includes(resolution);
+  const quantityNumber = Number(quantity);
+  const quantityError =
+    candidateResolution &&
+    (!Number.isInteger(quantityNumber) ||
+      quantityNumber < 1 ||
+      quantityNumber > 10_000)
+      ? 'Quantity must be a whole number from 1 to 10,000.'
+      : '';
+  const parserError =
+    activeItem?.type === 'Parser change' &&
+    resolution === 'edit_fields' &&
+    !parserValue.trim()
+      ? 'Enter the corrected parser value.'
+      : '';
+  const resolutionError = !resolution ? 'Choose an explicit resolution.' : '';
 
   const resolve = async () => {
     if (!activeItem) return;
+    if (resolutionError || quantityError || parserError) return;
+    if (activeItem.sessionOnly) {
+      if (resolution !== 'defer')
+        setItems((current) =>
+          current.filter((item) => item.id !== activeItem.id),
+        );
+      setActiveItem(null);
+      onNotice(
+        resolution === 'defer'
+          ? 'The session-only lot check remains in this page.'
+          : 'The linked demo lot check was resolved for this session only.',
+      );
+      return;
+    }
     if (!userSignedIn) {
       onNotice('Sign in with ChatGPT before resolving review records.');
       return;
@@ -4783,7 +5525,9 @@ function ReviewPage({
             resolution,
             details: {
               candidate: candidate.trim(),
-              quantity: Math.max(1, Number.parseInt(quantity) || 1),
+              quantity: quantityNumber,
+              parserField: activeItem.parserField,
+              parserValue: parserValue.trim(),
               originalTitle: activeItem.originalTitle,
             },
           }),
@@ -4825,6 +5569,12 @@ function ReviewPage({
             Uncertain records are withheld from high-confidence alerts until a
             scout resolves them.
           </p>
+          {initialSource === 'lot-lab' ? (
+            <small>
+              The three Lot Lab records are linked fictional session data; they
+              are not mixed into the account queue or production storage.
+            </small>
+          ) : null}
         </div>
         <div className="review-stat">
           <strong>
@@ -4931,6 +5681,34 @@ function ReviewPage({
               <div className="review-original">
                 <span className="eyebrow">Original listing title</span>
                 <h3>{activeItem.originalTitle}</h3>
+                <div className="review-evidence-state">
+                  {activeItem.imageUrl ? (
+                    <span>
+                      A captured image reference is retained with this record;
+                      use the verified source link below to inspect it.
+                    </span>
+                  ) : (
+                    <span>No captured image is available for this record.</span>
+                  )}
+                  {activeItem.sourceUrl ? (
+                    <a
+                      href={activeItem.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <ExternalLink /> Open retained source evidence
+                    </a>
+                  ) : (
+                    <span>
+                      No verified original URL is retained for this fictional
+                      record.
+                    </span>
+                  )}
+                  <small>
+                    {activeItem.evidenceNote ??
+                      'The fixture preserves the reported title and risk flags only.'}
+                  </small>
+                </div>
                 <dl>
                   <div>
                     <dt>Source</dt>
@@ -4964,20 +5742,41 @@ function ReviewPage({
                     value={resolution}
                     onValueChange={(value) => value && setResolution(value)}
                   >
-                    <SelectTrigger aria-label="Review resolution">
-                      <SelectValue />
+                    <SelectTrigger
+                      aria-label="Review resolution"
+                      aria-invalid={Boolean(resolutionError)}
+                    >
+                      <SelectValue>
+                        {resolution
+                          ? resolution.replaceAll('_', ' ')
+                          : 'Choose a resolution'}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="accept_candidate">
-                        Accept current candidate
-                      </SelectItem>
-                      <SelectItem value="select_alternative">
-                        Select alternative
-                      </SelectItem>
-                      <SelectItem value="edit_fields">Edit fields</SelectItem>
-                      <SelectItem value="packaging_only">
-                        Packaging only
-                      </SelectItem>
+                      {activeItem.type !== 'Parser change' &&
+                      !activeItem.riskFlags.includes('Empty packaging') ? (
+                        <>
+                          <SelectItem value="accept_candidate">
+                            Accept current candidate
+                          </SelectItem>
+                          <SelectItem value="select_alternative">
+                            Select alternative
+                          </SelectItem>
+                          <SelectItem value="edit_fields">
+                            Edit product fields
+                          </SelectItem>
+                        </>
+                      ) : null}
+                      {activeItem.type === 'Parser change' ? (
+                        <SelectItem value="edit_fields">
+                          Correct parser field
+                        </SelectItem>
+                      ) : null}
+                      {activeItem.riskFlags.includes('Empty packaging') ? (
+                        <SelectItem value="packaging_only">
+                          Confirm packaging only
+                        </SelectItem>
+                      ) : null}
                       <SelectItem value="duplicate">Duplicate</SelectItem>
                       <SelectItem value="reject_listing">
                         Reject listing
@@ -4985,15 +5784,37 @@ function ReviewPage({
                       <SelectItem value="defer">Defer</SelectItem>
                     </SelectContent>
                   </Select>
+                  {resolutionError ? (
+                    <small className="field-error">{resolutionError}</small>
+                  ) : null}
                 </label>
-                <label>
-                  <span>Canonical candidate</span>
-                  <Input
-                    value={candidate}
-                    onChange={(event) => setCandidate(event.target.value)}
-                  />
-                </label>
-                {activeItem.alternativeCandidates.length ? (
+                {activeItem.type === 'Parser change' ? (
+                  <label>
+                    <span>
+                      Corrected {activeItem.parserField ?? 'shipping'} value
+                    </span>
+                    <Input
+                      value={parserValue}
+                      aria-invalid={Boolean(parserError)}
+                      onChange={(event) => setParserValue(event.target.value)}
+                      placeholder="For example: shipping included"
+                    />
+                    {parserError ? (
+                      <small className="field-error">{parserError}</small>
+                    ) : null}
+                  </label>
+                ) : (
+                  <label>
+                    <span>Canonical candidate</span>
+                    <Input
+                      value={candidate}
+                      disabled={!candidateResolution}
+                      onChange={(event) => setCandidate(event.target.value)}
+                    />
+                  </label>
+                )}
+                {activeItem.type !== 'Parser change' &&
+                activeItem.alternativeCandidates.length ? (
                   <div className="candidate-options">
                     <span>Suggested alternatives</span>
                     {activeItem.alternativeCandidates.map((alternative) => (
@@ -5011,14 +5832,24 @@ function ReviewPage({
                     ))}
                   </div>
                 ) : null}
-                <label>
-                  <span>Quantity</span>
-                  <Input
-                    inputMode="numeric"
-                    value={quantity}
-                    onChange={(event) => setQuantity(event.target.value)}
-                  />
-                </label>
+                {activeItem.type !== 'Parser change' ? (
+                  <label>
+                    <span>Quantity</span>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="10000"
+                      step="1"
+                      value={quantity}
+                      disabled={!candidateResolution}
+                      aria-invalid={Boolean(quantityError)}
+                      onChange={(event) => setQuantity(event.target.value)}
+                    />
+                    {quantityError ? (
+                      <small className="field-error">{quantityError}</small>
+                    ) : null}
+                  </label>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -5033,7 +5864,11 @@ function ReviewPage({
             </Button>
             <Button
               className="gold-button"
-              disabled={saving || !candidate.trim()}
+              disabled={
+                saving ||
+                Boolean(resolutionError || quantityError || parserError) ||
+                (candidateResolution && !candidate.trim())
+              }
               onClick={() => void resolve()}
             >
               {saving ? 'Saving resolution…' : 'Save resolution'}
@@ -5055,6 +5890,8 @@ function SettingsPage({
   const [settings, setSettings] = useState<UserSettings>(defaultUserSettings);
   const [saving, setSaving] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(!userSignedIn);
+  const settingsErrors = validateUserSettings(settings);
+  const settingsValid = Object.keys(settingsErrors).length === 0;
 
   useEffect(() => {
     if (!userSignedIn) return;
@@ -5082,6 +5919,10 @@ function SettingsPage({
   }, [onNotice, userSignedIn]);
 
   const saveSettings = async () => {
+    if (!settingsValid) {
+      onNotice('Correct the highlighted settings before saving.');
+      return;
+    }
     if (!userSignedIn) {
       onNotice('Sign in with ChatGPT before saving settings.');
       return;
@@ -5144,7 +5985,11 @@ function SettingsPage({
                   }
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {{ nl: 'Netherlands', be: 'Belgium', de: 'Germany' }[
+                        settings.country.toLowerCase()
+                      ] ?? settings.country}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="nl">Netherlands</SelectItem>
@@ -5170,8 +6015,12 @@ function SettingsPage({
                 <span>Local radius</span>
                 <Input
                   disabled={!settingsLoaded || saving}
-                  inputMode="numeric"
+                  type="number"
+                  min="1"
+                  max="500"
+                  step="1"
                   value={settings.localRadiusKm}
+                  aria-invalid={Boolean(settingsErrors.localRadiusKm)}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
@@ -5179,6 +6028,11 @@ function SettingsPage({
                     }))
                   }
                 />
+                {settingsErrors.localRadiusKm ? (
+                  <small className="field-error">
+                    {settingsErrors.localRadiusKm}
+                  </small>
+                ) : null}
               </label>
               <label>
                 <span>Currency</span>
@@ -5196,8 +6050,12 @@ function SettingsPage({
                 <span>Labour rate</span>
                 <Input
                   disabled={!settingsLoaded || saving}
-                  inputMode="decimal"
+                  type="number"
+                  min="0"
+                  max="500"
+                  step="0.5"
                   value={settings.laborRate}
+                  aria-invalid={Boolean(settingsErrors.laborRate)}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
@@ -5205,6 +6063,11 @@ function SettingsPage({
                     }))
                   }
                 />
+                {settingsErrors.laborRate ? (
+                  <small className="field-error">
+                    {settingsErrors.laborRate}
+                  </small>
+                ) : null}
               </label>
               <label>
                 <span>Default exit</span>
@@ -5214,7 +6077,7 @@ function SettingsPage({
             <div className="button-row">
               <Button
                 className="gold-button"
-                disabled={saving || !settingsLoaded}
+                disabled={saving || !settingsLoaded || !settingsValid}
                 onClick={() => void saveSettings()}
               >
                 {saving ? 'Saving…' : 'Save settings'}
@@ -5252,8 +6115,12 @@ function SettingsPage({
                 <span>Required ROI</span>
                 <Input
                   disabled={!settingsLoaded || saving}
-                  inputMode="decimal"
+                  type="number"
+                  min="0"
+                  max="500"
+                  step="1"
                   value={Math.round(settings.requiredRoi * 100)}
+                  aria-invalid={Boolean(settingsErrors.requiredRoi)}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
@@ -5261,13 +6128,22 @@ function SettingsPage({
                     }))
                   }
                 />
+                {settingsErrors.requiredRoi ? (
+                  <small className="field-error">
+                    Enter an ROI from 0% to 500%.
+                  </small>
+                ) : null}
               </label>
               <label>
                 <span>Required profit (€)</span>
                 <Input
                   disabled={!settingsLoaded || saving}
-                  inputMode="decimal"
+                  type="number"
+                  min="0"
+                  max="100000"
+                  step="1"
                   value={settings.requiredProfit}
+                  aria-invalid={Boolean(settingsErrors.requiredProfit)}
                   onChange={(event) =>
                     setSettings((current) => ({
                       ...current,
@@ -5275,11 +6151,16 @@ function SettingsPage({
                     }))
                   }
                 />
+                {settingsErrors.requiredProfit ? (
+                  <small className="field-error">
+                    {settingsErrors.requiredProfit}
+                  </small>
+                ) : null}
               </label>
             </div>
             <Button
               className="gold-button"
-              disabled={saving || !settingsLoaded}
+              disabled={saving || !settingsLoaded || !settingsValid}
               onClick={() => void saveSettings()}
             >
               {saving ? 'Saving…' : 'Save scoring gates'}
@@ -5304,7 +6185,10 @@ function SettingsPage({
                 <Check />
                 <span>
                   <strong>Connector credentials</strong>
-                  <small>Encrypted at rest and redacted from logs</small>
+                  <small>
+                    Supplied only through the server environment and never
+                    returned to the public browser
+                  </small>
                 </span>
               </div>
               <div>

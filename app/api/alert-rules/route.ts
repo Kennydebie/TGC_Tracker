@@ -6,6 +6,7 @@ import {
 } from '@/lib/repositories/user-state';
 import { rejectCrossSiteMutation } from '@/lib/security';
 import { authenticationRequired, getRequestUser } from '@/lib/server/user';
+import { validateAlertRule } from '@/lib/workflow-integrity';
 
 export async function GET(request: Request) {
   const user = getRequestUser(request);
@@ -19,7 +20,7 @@ export async function PUT(request: Request) {
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   const body = (await request.json()) as Partial<AlertRuleInput>;
-  const numeric = [
+  const rawNumeric = [
     body.matchConfidence,
     body.minimumProfit,
     body.minimumRoi,
@@ -27,18 +28,28 @@ export async function PUT(request: Request) {
     body.maximumHoldingDays,
     body.maximumRiskScore,
   ];
-  if (numeric.some((value) => !Number.isFinite(value)) || !body.minimumGrade)
-    return Response.json({ error: 'Invalid alert rule' }, { status: 400 });
+  const numeric = {
+    matchConfidence: Number(body.matchConfidence),
+    minimumProfit: Number(body.minimumProfit),
+    minimumRoi: Number(body.minimumRoi),
+    minimumProfitPerHour: Number(body.minimumProfitPerHour),
+    maximumHoldingDays: Number(body.maximumHoldingDays),
+    maximumRiskScore: Number(body.maximumRiskScore),
+  };
+  const validationErrors = validateAlertRule(numeric);
+  if (
+    Object.keys(validationErrors).length ||
+    rawNumeric.some((value) => typeof value !== 'number') ||
+    !body.minimumGrade ||
+    !['A', 'B', 'C'].includes(body.minimumGrade)
+  )
+    return Response.json(
+      { error: 'Invalid alert rule', fields: validationErrors },
+      { status: 400 },
+    );
   const input: AlertRuleInput = {
-    matchConfidence: Math.max(0, Math.min(100, Number(body.matchConfidence))),
-    minimumProfit: Math.max(0, Number(body.minimumProfit)),
-    minimumRoi: Math.max(0, Math.min(5, Number(body.minimumRoi))),
-    minimumProfitPerHour: Math.max(0, Number(body.minimumProfitPerHour)),
-    minimumGrade: ['A', 'B', 'C'].includes(body.minimumGrade)
-      ? body.minimumGrade
-      : 'B',
-    maximumHoldingDays: Math.max(1, Number(body.maximumHoldingDays)),
-    maximumRiskScore: Math.max(0, Math.min(100, Number(body.maximumRiskScore))),
+    ...numeric,
+    minimumGrade: body.minimumGrade,
   };
   return Response.json({ data: await saveAlertRule(getD1(), user, input) });
 }

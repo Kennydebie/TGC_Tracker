@@ -457,6 +457,200 @@
   }
 }
 
+/* Workflow-integrity states added after the QA repair pass. */
+.field-error {
+  color: #f09292;
+  display: block;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  margin-top: 0.25rem;
+}
+
+[aria-invalid='true'] {
+  border-color: #b8525b !important;
+  box-shadow: 0 0 0 2px rgb(184 82 91 / 15%);
+}
+
+.market-no-results,
+.market-evidence-gap,
+.amazon-history-empty,
+.marktplaats-first-scan,
+.review-evidence-state,
+.community-dialog-notice {
+  border: 1px dashed #665239;
+  border-radius: 0.55rem;
+  color: #b9ad97;
+  display: flex;
+  gap: 0.6rem;
+  line-height: 1.45;
+  padding: 0.8rem;
+}
+
+.market-no-results,
+.review-evidence-state {
+  flex-direction: column;
+}
+
+.market-evidence-gap {
+  align-items: flex-start;
+  background: rgb(228 185 95 / 5%);
+  margin-top: 0.8rem;
+}
+
+.market-evidence-gap > div,
+.marktplaats-first-scan > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.market-evidence-gap svg,
+.marktplaats-first-scan svg,
+.community-dialog-notice > svg {
+  color: var(--bright-gold);
+  flex: 0 0 auto;
+  height: 1rem;
+  width: 1rem;
+}
+
+.market-empty-detail {
+  min-height: 16rem;
+}
+
+.timeline-entry.highlighted .timeline-card {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgb(201 154 67 / 12%);
+}
+
+.amazon-history-empty {
+  align-items: center;
+  justify-content: center;
+  min-height: 7rem;
+  text-align: center;
+}
+
+.marktplaats-status-actions,
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.marktplaats-status-actions {
+  margin-top: 0.7rem;
+}
+
+.marktplaats-first-scan {
+  align-items: flex-start;
+}
+
+.scope-note {
+  color: #9e927d;
+  font-size: 0.65rem;
+  margin: 0 0 0.7rem;
+}
+
+.completed-sale-ledger {
+  display: grid;
+  gap: 0.4rem;
+  grid-column: 1 / -1;
+}
+
+.completed-sale-ledger > div {
+  align-items: center;
+  background: rgb(255 255 255 / 2.5%);
+  border: 1px solid #493d2c;
+  border-radius: 0.45rem;
+  display: grid;
+  gap: 0.25rem 0.7rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.55rem;
+}
+
+.completed-sale-ledger small {
+  color: #9e927d;
+  font-size: 0.6rem;
+}
+
+.completed-sale-ledger strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.source-setup-dialog ol {
+  color: #c7bba4;
+  display: grid;
+  font-size: 0.72rem;
+  gap: 0.55rem;
+  line-height: 1.5;
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+
+.review-evidence-state {
+  background: rgb(0 0 0 / 16%);
+  font-size: 0.66rem;
+  margin: 0.7rem 0;
+}
+
+.review-evidence-state img {
+  border-radius: 0.4rem;
+  max-height: 13rem;
+  object-fit: contain;
+  width: 100%;
+}
+
+.review-evidence-state a {
+  align-items: center;
+  color: var(--bright-gold);
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.logic-strip.invalid {
+  border-color: #8f3e46;
+  color: #f09292;
+}
+
+.community-dialog-notice {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.community-dialog-notice span {
+  flex: 1 1 14rem;
+}
+
+.alert-actions {
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.alert-actions button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 850px) {
+  .alert-item {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .alert-item time,
+  .alert-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .completed-sale-ledger > div {
+    grid-template-columns: 1fr;
+  }
+
+  .completed-sale-ledger strong {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

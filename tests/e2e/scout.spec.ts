@@ -374,14 +374,15 @@ test('review resolution is confirmed before the queue row disappears', async ({
   page,
 }) => {
   await open(page, '/review');
-  const firstRow = page
-    .getByRole('row')
-    .filter({ has: page.getByRole('button', { name: 'Review' }) })
-    .first();
+  const firstRow = page.getByRole('row').filter({
+    hasText: 'Riftbound display / case ambiguity',
+  });
   const record = await firstRow.getByRole('cell').nth(1).innerText();
   await firstRow.getByRole('button', { name: 'Review' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Original listing title')).toBeVisible();
+  await dialog.getByLabel('Review resolution').click();
+  await page.getByRole('option', { name: 'Accept current candidate' }).click();
   await dialog.getByRole('button', { name: 'Save resolution' }).click();
   await expect(page.getByText(/Resolution saved before/)).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: record })).toHaveCount(
@@ -400,8 +401,150 @@ test('scanner honestly simulates a fixture and clears the candidate', async ({
   await expect(page.getByText(/No image recognition occurs/)).toBeVisible();
   await page.getByRole('button', { name: 'Simulate Demo Scan' }).click();
   await expect(page.getByText('SIMULATED · not image-derived')).toBeVisible();
-  await page.getByRole('button', { name: 'Correct match' }).click();
+  await page.getByRole('button', { name: 'Clear demo candidate' }).click();
   await expect(page.getByText('No scan yet')).toBeVisible();
+});
+
+test('market deep links preserve identity and no-result searches clear stale evidence', async ({
+  page,
+}) => {
+  await open(page, '/market?dealId=pe-etb-pair');
+  await expect(
+    page.getByRole('heading', { name: /Prismatic Evolutions/ }),
+  ).toBeVisible();
+  const search = page.getByPlaceholder(
+    'Search product, set, EAN or marketplace ID',
+  );
+  await search.fill('product that does not exist');
+  await page.getByRole('button', { name: 'Search market' }).click();
+  await expect(page.getByText('No supported market comparison')).toBeVisible();
+  await expect(
+    page.getByText(/No unrelated product has been substituted/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: /Prismatic Evolutions/ }),
+  ).toHaveCount(0);
+
+  await open(page, '/market?productId=riftbound-spiritforged-display');
+  await expect(page.getByText('No supported market comparison')).toBeVisible();
+  await expect(page.getByText(/Prismatic Evolutions/)).toHaveCount(0);
+});
+
+test('lot economics withhold the offer for negative labour and link exact demo reviews', async ({
+  page,
+}) => {
+  await open(page, '/lot-lab');
+  const labour = page.getByRole('spinbutton', {
+    name: 'Estimated labour hours',
+  });
+  await labour.fill('-10');
+  await expect(page.getByText('Value cannot be negative.')).toBeVisible();
+  await expect(page.getByText('Unavailable', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Load demo binder' }).click();
+  await page.getByRole('button', { name: 'Resolve 3 linked checks' }).click();
+  await expect(page).toHaveURL(/\/review\?source=lot-lab/);
+  await expect(page.getByText('Confirm Charizard 4/102 holo')).toBeVisible();
+  await expect(page.getByText(/session data/)).toBeVisible();
+});
+
+test('release filters handle Pokémon and every view stays chronological', async ({
+  page,
+}) => {
+  await open(page, '/releases');
+  await page.getByLabel('Filter releases by game').click();
+  await page.getByRole('option', { name: 'Pokémon' }).click();
+  await expect(page.getByText('Mega Evolution—Azure Storm')).toBeVisible();
+  await expect(page.getByText('Spiritforged')).toHaveCount(0);
+
+  await page.getByLabel('Filter releases by game').click();
+  await page.getByRole('option', { name: 'All games' }).click();
+  await page.getByRole('tab', { name: 'Compact table' }).click();
+  const dates = await page.locator('tbody tr td:first-child').allTextContents();
+  expect(dates).toEqual(['2026-09-11', '2026-09-18', '2026-10-09']);
+});
+
+test('portfolio export downloads reconciled and quoted accounting rows', async ({
+  page,
+}) => {
+  await open(page, '/portfolio');
+  await expect(page.getByText('€ 1.749,20')).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export accounting CSV' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('tcg-scout-accounting.csv');
+  const path = await download.path();
+  expect(path).not.toBeNull();
+});
+
+test('source setup is connector-specific and Retailer Watch is registered', async ({
+  page,
+}) => {
+  await open(page, '/sources?configure=ebay');
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByRole('heading', { name: 'eBay Browse API' }),
+  ).toBeVisible();
+  await expect(dialog.getByText(/EBAY_CLIENT_ID/)).toBeVisible();
+  await dialog.press('Escape');
+  const retailerCard = page.locator('.source-card').filter({
+    has: page.getByRole('heading', { name: 'Retailer Watch' }),
+  });
+  await retailerCard.getByRole('button', { name: 'Test connection' }).click();
+  await expect(retailerCard.getByRole('status')).toContainText(
+    'Allowlisted adapter required',
+  );
+});
+
+test('invalid alert and settings values are blocked inline', async ({
+  page,
+}) => {
+  await open(page, '/alerts');
+  const confidence = page.getByRole('spinbutton', { name: 'Match confidence' });
+  await confidence.fill('101');
+  await expect(page.getByText('Enter a value from 0 to 100.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save rules' })).toBeDisabled();
+  await expect(page.getByText(/Preview withheld/)).toBeVisible();
+
+  await open(page, '/settings');
+  const radius = page.getByRole('spinbutton', { name: 'Local radius' });
+  await radius.fill('-5');
+  await expect(page.getByText('Enter a value from 1 to 500.')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Save settings' }),
+  ).toBeDisabled();
+});
+
+test('alert targets retain the exact deal and empty packaging has no unsafe default', async ({
+  page,
+}) => {
+  await open(page, '/alerts');
+  const destinedAlert = page.locator('.alert-item').filter({
+    hasText: 'Destined Rivals price cut',
+  });
+  await destinedAlert
+    .getByRole('button', { name: 'Open', exact: true })
+    .click();
+  await expect(
+    page.getByRole('dialog').getByRole('heading', { name: /Destined Rivals/ }),
+  ).toBeVisible();
+  await page.getByRole('dialog').press('Escape');
+
+  await open(page, '/review');
+  const packagingRow = page.getByRole('row').filter({
+    hasText: 'Sealed 151 display for €22',
+  });
+  await packagingRow.getByRole('button', { name: 'Review' }).click();
+  const reviewDialog = page.getByRole('dialog');
+  await expect(reviewDialog.getByText('Choose a resolution')).toBeVisible();
+  await expect(
+    reviewDialog.getByRole('option', { name: 'Accept current candidate' }),
+  ).toHaveCount(0);
+  await expect(
+    reviewDialog.getByText(/No verified original URL is retained/),
+  ).toBeVisible();
+  await expect(
+    reviewDialog.getByRole('button', { name: 'Save resolution' }),
+  ).toBeDisabled();
 });
 
 test('EUR is the only available display currency', async ({ page }) => {

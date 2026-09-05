@@ -36,6 +36,7 @@ import {
 } from '@/lib/amazon';
 import { money, percent } from '@/lib/domain';
 import { cn } from '@/lib/utils';
+import { filterHistoryPoints } from '@/lib/workflow-integrity';
 
 const emptyDashboard: AmazonDashboard = {
   sourceState: 'key_required',
@@ -77,6 +78,15 @@ type WatchRule = {
   sourceUrl: string | null;
 };
 
+type AmazonGroupKey =
+  | 'best'
+  | 'drops'
+  | 'lows'
+  | 'restocks'
+  | 'discovered'
+  | 'review'
+  | 'watched';
+
 function dateTime(value: string | null) {
   if (!value) return 'Awaiting scan';
   return new Intl.DateTimeFormat('nl-NL', {
@@ -112,6 +122,11 @@ export function AmazonScout() {
   const [savingWatch, setSavingWatch] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [historyRange, setHistoryRange] = useState('90d');
+  const [activeGroup, setActiveGroup] = useState<AmazonGroupKey>('best');
+  const manualUrlError =
+    manualUrl.trim() && !isAllowedAmazonProductUrl(manualUrl.trim())
+      ? 'Enter an HTTPS Amazon product URL from a supported EU marketplace.'
+      : '';
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +198,10 @@ export function AmazonScout() {
     )[0];
 
   const saveWatch = async (url: string) => {
+    if (!isAllowedAmazonProductUrl(url.trim())) {
+      setNotice('Enter a valid supported Amazon product URL before saving.');
+      return;
+    }
     setSavingWatch(true);
     setNotice(null);
     try {
@@ -269,6 +288,14 @@ export function AmazonScout() {
             <div className="source-warning" role="alert">
               <KeyRound /> <span>{dashboard.reason}</span>
             </div>
+          ) : null}
+          {!dashboard.apiConnected ? (
+            <NativeNavigationLink
+              className={buttonVariants({ variant: 'outline' })}
+              href="/sources?configure=amazon-keepa"
+            >
+              <KeyRound /> View Keepa setup instructions
+            </NativeNavigationLink>
           ) : null}
           {error ? (
             <div className="source-warning" role="alert">
@@ -360,12 +387,21 @@ export function AmazonScout() {
               id="amazon-url"
               placeholder="https://www.amazon.de/dp/B0…"
               value={manualUrl}
+              aria-invalid={Boolean(manualUrlError)}
               onChange={(event) => setManualUrl(event.target.value)}
             />
-            <Button disabled={savingWatch || !manualUrl.trim()} type="submit">
+            <Button
+              disabled={
+                savingWatch || !manualUrl.trim() || Boolean(manualUrlError)
+              }
+              type="submit"
+            >
               <BellRing /> {savingWatch ? 'Saving…' : 'Add to Watchlist'}
             </Button>
           </div>
+          {manualUrlError ? (
+            <small className="field-error">{manualUrlError}</small>
+          ) : null}
         </form>
       </section>
 
@@ -389,8 +425,9 @@ export function AmazonScout() {
           ))}
         </select>
         <span>
-          {opportunities.length} displayed · {watchRules.length} personal URL
-          watches
+          {groups[activeGroup].length} in {activeGroup.replaceAll('_', ' ')} ·{' '}
+          {opportunities.length} total for the selected marketplace ·{' '}
+          {watchRules.length} personal URL watches
         </span>
       </section>
 
@@ -463,7 +500,13 @@ export function AmazonScout() {
         </p>
       </section>
 
-      <Tabs defaultValue="best" className="amazon-tabs">
+      <Tabs
+        value={activeGroup}
+        onValueChange={(value) =>
+          value && setActiveGroup(value as AmazonGroupKey)
+        }
+        className="amazon-tabs"
+      >
         <TabsList variant="line" aria-label="Amazon opportunity groups">
           <TabsTrigger value="best">Best deals</TabsTrigger>
           <TabsTrigger value="drops">Price drops</TabsTrigger>
@@ -613,8 +656,13 @@ function AmazonOpportunityCard({
   const safeUrl = isAllowedAmazonProductUrl(item.sourceListingUrl)
     ? buildAmazonProductUrl(item.asin, item.marketplace)
     : null;
+  const visibleHistory = filterHistoryPoints(
+    item.history.points,
+    historyRange,
+    Date.parse(item.fetchedAt),
+  );
   const historyMaximum = Math.max(
-    ...item.history.points.map((point) => point.price),
+    ...visibleHistory.map((point) => point.price),
     item.currentPrice ?? 1,
   );
   return (
@@ -756,20 +804,26 @@ function AmazonOpportunityCard({
               ))}
             </div>
           </div>
-          <div
-            className="amazon-sparkline"
-            aria-label={`${historyRange} price history`}
-          >
-            {item.history.points.map((point) => (
-              <span
-                key={point.at}
-                style={{
-                  height: `${Math.max(8, (point.price / historyMaximum) * 100)}%`,
-                }}
-                title={`${dateTime(point.at)} · ${price(point.price)}`}
-              />
-            ))}
-          </div>
+          {visibleHistory.length ? (
+            <div
+              className="amazon-sparkline"
+              aria-label={`${historyRange} price history with ${visibleHistory.length} observations`}
+            >
+              {visibleHistory.map((point) => (
+                <span
+                  key={point.at}
+                  style={{
+                    height: `${Math.max(8, (point.price / historyMaximum) * 100)}%`,
+                  }}
+                  title={`${dateTime(point.at)} · ${price(point.price)}`}
+                />
+              ))}
+            </div>
+          ) : (
+            <output className="amazon-history-empty">
+              No price observations fall inside this {historyRange} period.
+            </output>
+          )}
           <p>
             <PackageCheck /> Expected price {price(item.currentPrice)} · last
             Keepa update {item.ageMinutes ?? 'unknown'} minutes ago · offer

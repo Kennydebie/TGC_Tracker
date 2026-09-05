@@ -5,10 +5,15 @@ export const dynamic = 'force-dynamic';
 
 export default async function SectionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ section: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { section } = await params;
+  const [{ section }, rawSearchParams] = await Promise.all([
+    params,
+    searchParams,
+  ]);
   const sections = new Set([
     'deals',
     'marktplaats',
@@ -27,5 +32,13 @@ export default async function SectionPage({
     'settings',
   ]);
   if (!sections.has(section)) notFound();
-  return <ScoutPage section={section} />;
+  const initialSearchParams = Object.fromEntries(
+    Object.entries(rawSearchParams).flatMap(([key, value]) => {
+      const first = Array.isArray(value) ? value[0] : value;
+      return first ? [[key, first]] : [];
+    }),
+  );
+  return (
+    <ScoutPage section={section} initialSearchParams={initialSearchParams} />
+  );
 }

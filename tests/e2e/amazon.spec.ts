@@ -108,6 +108,34 @@ test('manual Amazon URL creates a watch without fetching HTML', async ({
   await expect(page.getByText(/1 personal URL watches/)).toBeVisible();
 });
 
+test('manual Amazon URL rejects malformed values before enabling save', async ({
+  page,
+}) => {
+  await page.getByLabel('Amazon product URL').fill('not-a-url');
+  await expect(
+    page.getByText(/Enter an HTTPS Amazon product URL/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Add to Watchlist' }),
+  ).toBeDisabled();
+});
+
+test('history range buttons change the rendered observation set', async ({
+  page,
+}) => {
+  const card = page.locator(prismatic).first();
+  await card.getByRole('button', { name: 'Inspect' }).click();
+  const history = card.locator('.amazon-sparkline');
+  const ninetyDayCount = await history.locator('span').count();
+  expect(ninetyDayCount).toBeGreaterThan(1);
+  await card.getByRole('button', { name: '7d' }).click();
+  await expect(card.locator('.amazon-sparkline span')).toHaveCount(1);
+  await card.getByRole('button', { name: '24h' }).click();
+  await expect(
+    card.getByText('No price observations fall inside this 24h period.'),
+  ).toBeVisible();
+});
+
 test('Shadow Buy persists and appears in existing Shadow Mode', async ({
   page,
 }) => {

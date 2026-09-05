@@ -187,6 +187,32 @@ test('market-confirmed opportunity shows normal economics before an alert', asyn
   await expect(card.getByRole('button', { name: 'Shadow Buy' })).toBeVisible();
 });
 
+test('community market handoff preserves canonical identity without substitution', async ({
+  page,
+}) => {
+  await page
+    .locator(spiritforged)
+    .getByRole('link', { name: 'View market' })
+    .click();
+  await expect(page).toHaveURL(/productId=riftbound-spiritforged-display/);
+  await expect(page.getByText('No supported market comparison')).toBeVisible();
+  await expect(page.getByText(/Prismatic Evolutions/)).toHaveCount(0);
+});
+
+test('signed-out community actions show recovery inside the open dialog', async ({
+  page,
+}) => {
+  await page.context().clearCookies();
+  await open(page, '/community?event=fixture-event-spiritforged-109');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Watch' }).click();
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await expect(
+    dialog.getByRole('link', { name: 'Sign in and keep this product' }),
+  ).toHaveAttribute('href', /event%3Dfixture-event-spiritforged-109/);
+});
+
 test('Watchtower saves configurable Community Radar gates', async ({
   page,
 }) => {

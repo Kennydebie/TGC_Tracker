@@ -66,6 +66,13 @@ export const connectorRegistry: ConnectorState[] = [
     status: 'existing_key_only',
     requirement: 'Existing developer credentials; new access is not assumed',
   },
+  {
+    id: 'retailers',
+    enabled: false,
+    status: 'authorized_adapter_required',
+    requirement:
+      'An allowlisted retailer adapter with documented API or feed access',
+  },
 ];
 
 export function getEnabledConnectors(): SourceConnector[] {
