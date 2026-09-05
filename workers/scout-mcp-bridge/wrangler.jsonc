@@ -13,7 +13,7 @@
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
-      "id": "REPLACE_WITH_OAUTH_KV_NAMESPACE_ID",
+      "id": "3266c36700834cfcbc34536d5f5fc2a7",
     },
   ],
   "observability": {
