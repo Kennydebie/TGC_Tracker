@@ -292,7 +292,7 @@ export function AmazonScout() {
           {!dashboard.apiConnected ? (
             <NativeNavigationLink
               className={buttonVariants({ variant: 'outline' })}
-              href="/sources?configure=amazon-keepa"
+              href="/marketplaces?source=connections&configure=amazon-keepa"
             >
               <KeyRound /> View Keepa setup instructions
             </NativeNavigationLink>

@@ -174,7 +174,7 @@ export function MarktplaatsScout() {
             </Button>
             <NativeNavigationLink
               className={buttonVariants({ variant: 'outline' })}
-              href="/sources?configure=marktplaats-public"
+              href="/marketplaces?source=connections&configure=marktplaats-public"
             >
               Setup & recovery
             </NativeNavigationLink>

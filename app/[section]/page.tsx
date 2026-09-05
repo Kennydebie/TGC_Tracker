@@ -1,5 +1,5 @@
 import { ScoutPage } from '@/app/scout-page';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,10 +14,25 @@ export default async function SectionPage({
     params,
     searchParams,
   ]);
+  const legacyMarketplaceSources: Record<string, string> = {
+    amazon: 'amazon',
+    marktplaats: 'marktplaats',
+    sources: 'connections',
+  };
+  const legacySource = legacyMarketplaceSources[section];
+  if (legacySource) {
+    const targetSearchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(rawSearchParams)) {
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (item !== undefined) targetSearchParams.append(key, item);
+      }
+    }
+    targetSearchParams.set('source', legacySource);
+    redirect(`/marketplaces?${targetSearchParams.toString()}`);
+  }
   const sections = new Set([
     'deals',
-    'marktplaats',
-    'amazon',
+    'marketplaces',
     'community',
     'lot-lab',
     'market',
@@ -27,7 +42,6 @@ export default async function SectionPage({
     'shadow',
     'portfolio',
     'alerts',
-    'sources',
     'review',
     'settings',
   ]);

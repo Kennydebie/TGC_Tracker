@@ -34,7 +34,6 @@ import {
   ExternalLink,
   Scale,
   Search,
-  ShoppingBag,
   ShieldAlert,
   Sparkles,
   Table2,
@@ -137,8 +136,7 @@ import {
 type Section =
   | 'dashboard'
   | 'deals'
-  | 'marktplaats'
-  | 'amazon'
+  | 'marketplaces'
   | 'community'
   | 'lot-lab'
   | 'market'
@@ -148,14 +146,29 @@ type Section =
   | 'shadow'
   | 'portfolio'
   | 'alerts'
-  | 'sources'
   | 'review'
   | 'settings';
+
+type MarketplaceView = 'ebay' | 'marktplaats' | 'amazon' | 'connections';
+
+const LEGACY_MARKETPLACE_VIEWS: Record<string, MarketplaceView> = {
+  marktplaats: 'marktplaats',
+  amazon: 'amazon',
+  sources: 'connections',
+};
+
+const MARKETPLACE_VIEWS = new Set<MarketplaceView>([
+  'ebay',
+  'marktplaats',
+  'amazon',
+  'connections',
+]);
 
 type ScoutAppProps = {
   initialSection?: string;
   initialDealId?: string;
   initialSearchParams?: Record<string, string>;
+  initialDeals?: Deal[];
   user?: { displayName: string; email: string } | null;
   signInPath?: string;
   signOutPath?: string;
@@ -253,6 +266,14 @@ function dealAgeLabel(item: Deal, now = Date.now()) {
   return hours < 48 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
 
+function isLiveEbayDeal(item: Deal) {
+  return (
+    item.dataMode === 'production' &&
+    (item.source.toLowerCase().includes('ebay') ||
+      item.sourceMarketplace.toUpperCase().startsWith('EBAY_'))
+  );
+}
+
 const navItems: {
   section: Section;
   label: string;
@@ -275,18 +296,11 @@ const navItems: {
     icon: Compass,
   },
   {
-    section: 'marktplaats',
-    label: 'Marktplaats Scout',
-    subtitle: 'Local Market Hunt',
-    href: '/marktplaats',
-    icon: MapPin,
-  },
-  {
-    section: 'amazon',
-    label: 'Amazon Scout',
-    subtitle: 'Merchant Realms',
-    href: '/amazon',
-    icon: ShoppingBag,
+    section: 'marketplaces',
+    label: 'Marketplaces',
+    subtitle: 'eBay · Marktplaats · Amazon',
+    href: '/marketplaces',
+    icon: Radar,
   },
   {
     section: 'community',
@@ -352,13 +366,6 @@ const navItems: {
     icon: Bell,
   },
   {
-    section: 'sources',
-    label: 'Market Realms',
-    subtitle: 'Source health',
-    href: '/sources',
-    icon: Radar,
-  },
-  {
     section: 'review',
     label: 'Review Queue',
     subtitle: 'Uncertain records',
@@ -380,13 +387,9 @@ const pageMeta: Record<Section, { title: string; subtitle: string }> = {
     title: 'Bounty Board',
     subtitle: 'Underpriced listings that survive the costs',
   },
-  marktplaats: {
-    title: 'Marktplaats Scout',
-    subtitle: 'Local Market Hunt',
-  },
-  amazon: {
-    title: 'Amazon Scout',
-    subtitle: 'Merchant Realms',
+  marketplaces: {
+    title: 'Marketplaces',
+    subtitle: 'Listings, monitors and connections in one workspace',
   },
   community: {
     title: 'Community Radar',
@@ -424,10 +427,6 @@ const pageMeta: Record<Section, { title: string; subtitle: string }> = {
     title: 'Alerts',
     subtitle: 'High-signal rules with strict confidence gates',
   },
-  sources: {
-    title: 'Market Realms',
-    subtitle: 'Connector access, freshness and compliance',
-  },
   review: {
     title: 'Review Queue',
     subtitle: 'Human decisions where automation is uncertain',
@@ -444,24 +443,33 @@ export function ScoutApp({
   initialSection = 'dashboard',
   initialDealId,
   initialSearchParams = {},
+  initialDeals = deals,
   user,
   signInPath = '/signin-with-chatgpt?return_to=%2F',
   signOutPath = '/signout-with-chatgpt?return_to=%2F',
 }: ScoutAppProps) {
-  const section = validSections.has(initialSection as Section)
-    ? (initialSection as Section)
+  const requestedSection = LEGACY_MARKETPLACE_VIEWS[initialSection]
+    ? 'marketplaces'
+    : initialSection;
+  const section = validSections.has(requestedSection as Section)
+    ? (requestedSection as Section)
     : 'dashboard';
-  const [dealRecords, setDealRecords] = useState<Deal[]>(deals);
+  const [dealRecords, setDealRecords] = useState<Deal[]>(initialDeals);
   const [trackedIds, setTrackedIds] = useState(
-    () => new Set(deals.filter((item) => item.tracked).map((item) => item.id)),
+    () =>
+      new Set(
+        initialDeals.filter((item) => item.tracked).map((item) => item.id),
+      ),
   );
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(() =>
     initialDealId
-      ? (deals.find((item) => item.id === initialDealId) ?? null)
+      ? (initialDeals.find((item) => item.id === initialDealId) ?? null)
       : null,
   );
-  const [notice, setNotice] = useState(
-    'Demo Mode uses fictional, isolated market records.',
+  const [notice, setNotice] = useState(() =>
+    initialDeals.some((item) => item.dataMode === 'production')
+      ? `${initialDeals.filter((item) => item.dataMode === 'production').length} live marketplace listings loaded. Demo records remain clearly isolated.`
+      : 'Demo Mode uses fictional, isolated market records.',
   );
   const [globalQuery, setGlobalQuery] = useState('');
   const [pendingTrackIds, setPendingTrackIds] = useState<Set<string>>(
@@ -475,6 +483,16 @@ export function ScoutApp({
     () => new Set(),
   );
   const [shadowRows, setShadowRows] = useState<ShadowTradeRow[]>(shadowTrades);
+  const productionRecordCount = dealRecords.filter(
+    (item) => item.dataMode === 'production',
+  ).length;
+  const demoRecordCount = dealRecords.filter(
+    (item) => item.dataMode === 'demo',
+  ).length;
+  const initialMarketplaceSource =
+    initialSearchParams.source ??
+    LEGACY_MARKETPLACE_VIEWS[initialSection] ??
+    'ebay';
 
   useEffect(() => {
     if (!initialDealId) return;
@@ -500,7 +518,17 @@ export function ScoutApp({
         return (await response.json()) as { data: Deal[] };
       })
       .then((payload) => {
-        if (!cancelled) setDealRecords(payload.data);
+        if (!cancelled) {
+          setDealRecords(payload.data);
+          const productionCount = payload.data.filter(
+            (item) => item.dataMode === 'production',
+          ).length;
+          if (productionCount > 0) {
+            setNotice(
+              `${productionCount} live marketplace listings loaded. Demo records remain clearly isolated.`,
+            );
+          }
+        }
       })
       .catch(() => {
         if (!cancelled)
@@ -802,10 +830,18 @@ export function ScoutApp({
         <div className="realm-mini">
           <span className="pulse-dot" />
           <div>
-            <strong>Demo realm</strong>
-            <small>{sources.length + 1} configured sources</small>
+            <strong>
+              {productionRecordCount > 0 ? 'Live market feed' : 'Demo realm'}
+            </strong>
+            <small>
+              {productionRecordCount > 0
+                ? `${productionRecordCount} production records`
+                : `${sources.length + 1} configured sources`}
+            </small>
           </div>
-          <span className="mono">isolated</span>
+          <span className="mono">
+            {productionRecordCount > 0 ? 'online' : 'isolated'}
+          </span>
         </div>
       </aside>
 
@@ -867,7 +903,10 @@ export function ScoutApp({
           </form>
           <div className="top-actions">
             <Badge className="demo-badge">
-              <Sparkles /> Demo Mode
+              {productionRecordCount > 0 ? <HeartPulse /> : <Sparkles />}
+              {productionRecordCount > 0
+                ? `${productionRecordCount} live · ${demoRecordCount} demo`
+                : 'Demo Mode'}
             </Badge>
             <Tooltip>
               <TooltipTrigger
@@ -938,8 +977,20 @@ export function ScoutApp({
               trackedIds={trackedIds}
             />
           )}
-          {section === 'marktplaats' && <MarktplaatsScout />}
-          {section === 'amazon' && <AmazonScout />}
+          {section === 'marketplaces' && (
+            <MarketplacesPage
+              deals={dealRecords}
+              initialConfigureId={initialSearchParams.configure}
+              initialSource={initialMarketplaceSource}
+              onInspect={setSelectedDeal}
+              onNotice={setNotice}
+              onOpenListing={(deal) => void recheckDeal(deal, true)}
+              onTrack={toggleTrack}
+              pendingTrackIds={visiblePendingTrackIds}
+              recheckingIds={recheckingIds}
+              trackedIds={trackedIds}
+            />
+          )}
           {section === 'community' && (
             <CommunityRadar
               initialEventId={initialSearchParams.event}
@@ -987,12 +1038,6 @@ export function ScoutApp({
               onOpenListing={(deal) => void recheckDeal(deal, true)}
               recheckingIds={recheckingIds}
               userSignedIn={Boolean(user)}
-            />
-          )}
-          {section === 'sources' && (
-            <SourcesPage
-              initialConfigureId={initialSearchParams.configure}
-              onNotice={setNotice}
             />
           )}
           {section === 'review' && (
@@ -1251,6 +1296,28 @@ function Dashboard({
   trackedIds: Set<string>;
 }) {
   const qualified = records.filter(qualifiesForQuickFlip);
+  const liveEbayRecords = records.filter(isLiveEbayDeal);
+  const demoRecords = records.filter((item) => item.dataMode === 'demo');
+  const featuredRecords =
+    liveEbayRecords.length > 0 ? liveEbayRecords : records;
+  const latestEbayVerification = liveEbayRecords[0]?.lastVerifiedAt;
+  const dashboardSources = sources.map((source) =>
+    source.id === 'ebay' && liveEbayRecords.length > 0
+      ? {
+          ...source,
+          health: 'Healthy',
+          lastScan: latestEbayVerification
+            ? `Verified ${new Date(latestEbayVerification).toLocaleString(
+                'nl-NL',
+                {
+                  timeZone: 'Europe/Amsterdam',
+                },
+              )}`
+            : 'Live records received',
+          records: liveEbayRecords.length,
+        }
+      : source,
+  );
   const orderedReleases = sortReleasesChronologically(releases);
   const nextReleaseDays = Math.min(
     ...orderedReleases.map(
@@ -1300,7 +1367,14 @@ function Dashboard({
         </div>
         <div className="command-statuses">
           <span>
-            <i className="status-warn" /> eBay live credentials required
+            <i
+              className={
+                liveEbayRecords.length > 0 ? 'status-live' : 'status-warn'
+              }
+            />{' '}
+            {liveEbayRecords.length > 0
+              ? `eBay connected · ${liveEbayRecords.length} active asks`
+              : 'eBay awaiting its first authenticated listing scan'}
           </span>
           <span>
             <i className="status-warn" /> Cardmarket official URLs required
@@ -1354,7 +1428,11 @@ function Dashboard({
           value={String(
             records.filter((item) => item.dataMode === 'production').length,
           )}
-          detail="credentials required for eBay"
+          detail={
+            liveEbayRecords.length > 0
+              ? 'eBay Browse authenticated'
+              : 'awaiting a live source scan'
+          }
           tone="green"
         />
         <MetricPlaque
@@ -1369,8 +1447,16 @@ function Dashboard({
       <div className="content-grid primary-grid">
         <div className="wide-column">
           <SectionHeading
-            title="Best Hunts Today"
-            subtitle="Ranked by conservative profit, executability and confidence"
+            title={
+              liveEbayRecords.length > 0
+                ? 'Latest Live eBay Listings'
+                : 'Best Hunts Today'
+            }
+            subtitle={
+              liveEbayRecords.length > 0
+                ? 'Observed active asks from the official API · not completed-sale evidence'
+                : 'Ranked demo opportunities using conservative economics'
+            }
             action={
               <NativeNavigationLink className="text-link" href="/deals">
                 View bounty board <ArrowRight />
@@ -1378,7 +1464,7 @@ function Dashboard({
             }
           />
           <div className="deal-grid">
-            {records.slice(0, 3).map((item) => (
+            {featuredRecords.slice(0, 3).map((item) => (
               <DealCard
                 deal={item}
                 key={item.id}
@@ -1431,35 +1517,35 @@ function Dashboard({
           <Panel className="watch-snapshot">
             <SectionHeading title="Watchtower" subtitle="Recent triggers" />
             <WatchEvent
-              deal={records[0] ?? null}
+              deal={demoRecords[0] ?? null}
               tone="critical"
               title="Target crossed"
               time="Fixture event 1"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
-                records[0] && recheckingIds.has(records[0].id),
+                demoRecords[0] && recheckingIds.has(demoRecords[0].id),
               )}
             />
             <WatchEvent
-              deal={records[1] ?? null}
+              deal={demoRecords[1] ?? null}
               tone="positive"
               title="New sold evidence"
               detail="Fictional Destined Rivals completed-sale cohort"
               time="Fixture event 2"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
-                records[1] && recheckingIds.has(records[1].id),
+                demoRecords[1] && recheckingIds.has(demoRecords[1].id),
               )}
             />
             <WatchEvent
-              deal={records[2] ?? null}
+              deal={demoRecords[2] ?? null}
               tone="warning"
               title="Price changed"
               detail="Origins display · exit now negative"
               time="Fixture event 3"
               onOpenListing={onOpenListing}
               rechecking={Boolean(
-                records[2] && recheckingIds.has(records[2].id),
+                demoRecords[2] && recheckingIds.has(demoRecords[2].id),
               )}
             />
             <NativeNavigationLink
@@ -1490,8 +1576,8 @@ function Dashboard({
           </div>
         </Panel>
         <Panel className="source-strip">
-          <SectionHeading title="Market Realms" subtitle="Source freshness" />
-          {sources.map((source) => (
+          <SectionHeading title="Marketplaces" subtitle="Source freshness" />
+          {dashboardSources.map((source) => (
             <div className="source-mini-row" key={source.id}>
               <span
                 className={cn(
@@ -4935,6 +5021,154 @@ function AlertItem({
   );
 }
 
+function MarketplacesPage({
+  deals: records,
+  initialConfigureId,
+  initialSource,
+  onInspect,
+  onNotice,
+  onOpenListing,
+  onTrack,
+  pendingTrackIds,
+  recheckingIds,
+  trackedIds,
+}: {
+  deals: Deal[];
+  initialConfigureId?: string;
+  initialSource?: string;
+  onInspect: (deal: Deal) => void;
+  onNotice: (text: string) => void;
+  onOpenListing: (deal: Deal) => void;
+  onTrack: (id: string) => Promise<void>;
+  pendingTrackIds: Set<string>;
+  recheckingIds: Set<string>;
+  trackedIds: Set<string>;
+}) {
+  const requestedView = initialConfigureId ? 'connections' : initialSource;
+  const [activeView, setActiveView] = useState<MarketplaceView>(
+    MARKETPLACE_VIEWS.has(requestedView as MarketplaceView)
+      ? (requestedView as MarketplaceView)
+      : 'ebay',
+  );
+  const liveEbayRecords = records.filter(isLiveEbayDeal);
+
+  const selectView = (view: MarketplaceView) => {
+    setActiveView(view);
+    const url = new URL(window.location.href);
+    url.searchParams.set('source', view);
+    if (view !== 'connections') url.searchParams.delete('configure');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  };
+
+  return (
+    <div className="page-stack marketplace-hub">
+      <Panel className="marketplace-hub-intro">
+        <div>
+          <span className="panel-kicker">
+            <Radar /> Unified marketplace desk
+          </span>
+          <h2>One place for every marketplace</h2>
+          <p>
+            Browse eBay, Marktplaats and Amazon without jumping between sidebar
+            areas. Each record still names its source and evidence type so an
+            active ask is never mistaken for a completed sale.
+          </p>
+        </div>
+        <div className="marketplace-hub-counts" aria-label="Marketplace status">
+          <strong className="mono">{liveEbayRecords.length}</strong>
+          <span>live eBay asks</span>
+          <small>Official API · production data</small>
+        </div>
+      </Panel>
+
+      <Tabs
+        className="marketplace-hub-tabs"
+        value={activeView}
+        onValueChange={(value) => selectView(value as MarketplaceView)}
+      >
+        <TabsList variant="line" aria-label="Marketplace workspace">
+          <TabsTrigger value="ebay">eBay</TabsTrigger>
+          <TabsTrigger value="marktplaats">Marktplaats</TabsTrigger>
+          <TabsTrigger value="amazon">Amazon</TabsTrigger>
+          <TabsTrigger value="connections">Connections &amp; setup</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ebay">
+          <div className="page-stack marketplace-ebay-view">
+            <Panel className="marketplace-live-summary">
+              <div>
+                <span className="panel-kicker">
+                  <HeartPulse /> eBay Browse API
+                </span>
+                <h2>Live eBay listings</h2>
+                <p>
+                  These are observed active asks from eBay’s official API. They
+                  are not completed-sale evidence and are not automatically
+                  qualified as profitable deals.
+                </p>
+              </div>
+              <NativeNavigationLink
+                className="iron-link"
+                href="/marketplaces?source=connections&configure=ebay"
+              >
+                Connection settings
+              </NativeNavigationLink>
+            </Panel>
+            {liveEbayRecords.length > 0 ? (
+              <div className="deal-grid marketplace-deal-grid">
+                {liveEbayRecords.slice(0, 12).map((item) => (
+                  <DealCard
+                    deal={item}
+                    key={item.id}
+                    onInspect={onInspect}
+                    onOpenListing={onOpenListing}
+                    onTrack={onTrack}
+                    rechecking={recheckingIds.has(item.id)}
+                    surface="deals"
+                    tracking={pendingTrackIds.has(item.id)}
+                    tracked={trackedIds.has(item.id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Panel className="empty-state marketplace-empty">
+                <Radar />
+                <h3>No live eBay listings yet</h3>
+                <p>
+                  Open Connections &amp; setup to test the official API, then
+                  run an authenticated scan. Demo records stay out of this feed.
+                </p>
+              </Panel>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="marktplaats">
+          <MarktplaatsScout />
+        </TabsContent>
+
+        <TabsContent value="amazon">
+          <AmazonScout />
+        </TabsContent>
+
+        <TabsContent value="connections">
+          <SourcesPage
+            initialConfigureId={initialConfigureId}
+            onNotice={onNotice}
+            productionDeals={records.filter(
+              (item) => item.dataMode === 'production',
+            )}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
 const sourceSetupGuidance: Record<
   string,
   { title: string; summary: string; steps: string[]; operatorOnly: boolean }
@@ -5023,10 +5257,14 @@ function readableSourceStatus(value: string) {
 function SourcesPage({
   initialConfigureId,
   onNotice,
+  productionDeals,
 }: {
   initialConfigureId?: string;
   onNotice: (text: string) => void;
+  productionDeals: Deal[];
 }) {
+  const liveEbayDeals = productionDeals.filter(isLiveEbayDeal);
+  const latestEbayVerification = liveEbayDeals[0]?.lastVerifiedAt;
   const [testingSourceId, setTestingSourceId] = useState<string | null>(null);
   const [configureId, setConfigureId] = useState<string | null>(
     initialConfigureId && sourceSetupGuidance[initialConfigureId]
@@ -5041,6 +5279,17 @@ function SourcesPage({
   const [sourceResults, setSourceResults] = useState<
     Record<string, { ok: boolean; status: string; checkedAt: string }>
   >({});
+  const effectiveSourceResults =
+    liveEbayDeals.length > 0 && !sourceResults.ebay
+      ? {
+          ...sourceResults,
+          ebay: {
+            ok: true,
+            status: `Authenticated · ${liveEbayDeals.length} active asks received`,
+            checkedAt: latestEbayVerification ?? new Date().toISOString(),
+          },
+        }
+      : sourceResults;
   useEffect(() => {
     let cancelled = false;
     void fetch('/api/marktplaats', { cache: 'no-store' })
@@ -5094,6 +5343,21 @@ function SourcesPage({
       setTestingSourceId(null);
     }
   };
+  const displayedSources = sources.map((source) => {
+    if (source.id !== 'ebay') return source;
+    const result = effectiveSourceResults.ebay;
+    if (!result) return source;
+    return {
+      ...source,
+      health: result.ok ? 'Healthy' : result.status,
+      lastScan: new Date(result.checkedAt).toLocaleString('nl-NL', {
+        timeZone: 'Europe/Amsterdam',
+      }),
+      nextScan: result.ok ? 'Scheduled scan or manual run' : 'After setup',
+      records: liveEbayDeals.length,
+      mode: result.ok ? ('Live' as const) : source.mode,
+    };
+  });
   return (
     <div className="page-stack">
       <Panel className="source-overview">
@@ -5114,9 +5378,7 @@ function SourcesPage({
           </strong>
           <span>isolated fixture connector</span>
           <small>
-            {sources.filter(
-              (source) => source.mode === 'Live' && source.health === 'Healthy',
-            ).length +
+            {(effectiveSourceResults.ebay?.ok ? 1 : 0) +
               (marktplaatsSource?.status === 'healthy' ? 1 : 0) +
               (amazonSource?.apiConnected ? 1 : 0)}{' '}
             genuinely live
@@ -5188,7 +5450,10 @@ function SourcesPage({
             controls.
           </div>
           <div className="card-actions">
-            <NativeNavigationLink className="iron-link" href="/marktplaats">
+            <NativeNavigationLink
+              className="iron-link"
+              href="/marketplaces?source=marktplaats"
+            >
               Open Scout
             </NativeNavigationLink>
             <Button
@@ -5284,7 +5549,10 @@ function SourcesPage({
             for manual or future provider support. No scraping fallback.
           </div>
           <div className="card-actions">
-            <NativeNavigationLink className="iron-link" href="/amazon">
+            <NativeNavigationLink
+              className="iron-link"
+              href="/marketplaces?source=amazon"
+            >
               Open Amazon Scout
             </NativeNavigationLink>
             <Button
@@ -5296,7 +5564,7 @@ function SourcesPage({
             </Button>
           </div>
         </Panel>
-        {sources
+        {displayedSources
           .filter((source) => source.id !== 'marktplaats')
           .map((source) => (
             <Panel className="source-card" key={source.id}>
@@ -5339,16 +5607,16 @@ function SourcesPage({
                 <ShieldAlert />
                 {source.note}
               </div>
-              {sourceResults[source.id] ? (
+              {effectiveSourceResults[source.id] ? (
                 <output className="safety-note">
                   <HeartPulse />
                   <span>
-                    {sourceResults[source.id].ok
+                    {effectiveSourceResults[source.id].ok
                       ? 'Connected'
                       : 'Not connected'}{' '}
-                    · {sourceResults[source.id].status} ·{' '}
+                    · {effectiveSourceResults[source.id].status} ·{' '}
                     {new Date(
-                      sourceResults[source.id].checkedAt,
+                      effectiveSourceResults[source.id].checkedAt,
                     ).toLocaleTimeString('nl-NL', {
                       timeZone: 'Europe/Amsterdam',
                     })}

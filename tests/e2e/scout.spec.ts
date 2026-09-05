@@ -1,6 +1,71 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { calculateEconomics, type Deal } from '../../lib/domain';
+
 const prismatic = '[data-deal-id="pe-etb-pair"]';
+
+const liveEbayDeal: Deal = {
+  id: 'listing:ebay:live-homepage-regression',
+  title: 'Pokémon Prismatic Evolutions Elite Trainer Box sealed',
+  canonicalProduct: 'Prismatic Evolutions Elite Trainer Box',
+  game: 'Pokémon',
+  set: 'Prismatic Evolutions',
+  productType: 'Elite trainer box',
+  source: 'eBay Browse (live)',
+  dataMode: 'production',
+  sourceListingUrl: 'https://www.ebay.nl/itm/123456789012',
+  sourceListingId: 'live-homepage-regression',
+  sourceMarketplace: 'ebay',
+  lastVerifiedAt: '2026-09-05T12:00:00.000Z',
+  availabilityStatus: 'available',
+  detectedAt: '2026-09-05T11:55:00.000Z',
+  location: 'Marketplace listing',
+  language: 'Unknown',
+  condition: 'New',
+  quantity: 1,
+  seller: 'verified-ebay-seller',
+  sellerScore: 0,
+  listingAge: '5 min',
+  detectedMinutesAgo: 5,
+  matchConfidence: 82,
+  confidenceGrade: 'C',
+  liquidity: 'Unknown',
+  soldCount30d: null,
+  activeListings: null,
+  medianDaysToSell: null,
+  instantScore: 12,
+  holdScore: 0,
+  riskScore: 85,
+  status: 'Speculative',
+  exitChannel: 'No supported exit',
+  priceEvidence:
+    'Observed active listing only; no completed-sale evidence stored.',
+  risks: ['No completed-sale evidence stored for this live listing'],
+  catalysts: [],
+  tags: ['Live source', 'Active ask only'],
+  tint: 'blue',
+  tracked: false,
+  economics: calculateEconomics({
+    itemPrice: 64.99,
+    inboundShipping: 6.95,
+    buyerFees: 0,
+    paymentFees: 0,
+    importCosts: 0,
+    travelCost: 0,
+    acquisitionLabor: 0,
+    expectedSalePrice: 0,
+    sellerFees: 0,
+    exitPaymentFees: 0,
+    outboundShipping: 0,
+    packaging: 0,
+    expectedReturnLoss: 0,
+    sellingLabor: 0,
+    liquidityHaircut: 0,
+    estimatedHours: 1,
+    expectedHoldingDays: 90,
+    requiredProfit: 25,
+  }),
+};
 
 const marktplaatsDashboard = {
   accessMode: 'public_monitor',
@@ -125,8 +190,7 @@ test('primary navigation loads every product surface', async ({ page }) => {
   await expect(page.getByLabel('Sign in with ChatGPT')).toBeVisible();
   const paths = [
     '/deals',
-    '/marktplaats',
-    '/amazon',
+    '/marketplaces',
     '/lot-lab',
     '/market',
     '/releases',
@@ -135,7 +199,6 @@ test('primary navigation loads every product surface', async ({ page }) => {
     '/watchlist',
     '/shadow',
     '/alerts',
-    '/sources',
     '/review',
     '/settings',
   ];
@@ -152,6 +215,114 @@ test('primary navigation loads every product surface', async ({ page }) => {
     );
     await expect(page.locator('main.main-content')).toBeVisible();
   }
+  for (const legacyPath of ['/marktplaats', '/amazon', '/sources']) {
+    await expect(
+      page.locator(
+        `nav[aria-label="Primary navigation"] a[href="${legacyPath}"]`,
+      ),
+    ).toHaveCount(0);
+  }
+});
+
+test('Marketplaces unifies source browsing and setup while legacy links remain compatible', async ({
+  page,
+}) => {
+  await open(page, '/marketplaces');
+  await expect(
+    page.getByRole('heading', { name: 'Marketplaces', level: 1 }),
+  ).toBeVisible();
+  for (const name of ['eBay', 'Marktplaats', 'Amazon', 'Connections & setup']) {
+    await expect(page.getByRole('tab', { name, exact: true })).toBeVisible();
+  }
+  for (const [name, source] of [
+    ['Marktplaats', 'marktplaats'],
+    ['Amazon', 'amazon'],
+    ['Connections & setup', 'connections'],
+    ['eBay', 'ebay'],
+  ] as const) {
+    const tab = page.getByRole('tab', { name, exact: true });
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveURL(
+      new RegExp(`/marketplaces\\?source=${source}$`),
+    );
+  }
+
+  await open(page, '/marktplaats');
+  await expect(
+    page.getByRole('heading', { name: 'Marketplaces', level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('tab', { name: 'Marktplaats', exact: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+
+  await open(page, '/amazon');
+  await expect(
+    page.getByRole('heading', { name: 'Marketplaces', level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('tab', { name: 'Amazon', exact: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+
+  await open(page, '/sources?configure=ebay');
+  await expect(page.locator('h1', { hasText: 'Marketplaces' })).toBeVisible();
+  await expect(
+    page.locator('[role="tab"]', { hasText: 'Connections & setup' }),
+  ).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByRole('dialog').getByRole('heading', { name: 'eBay Browse API' }),
+  ).toBeVisible();
+});
+
+test('Scout Board and eBay tab render production listings returned by the live deals feed', async ({
+  page,
+}) => {
+  await page.route('**/api/deals', (route) =>
+    route.fulfill({
+      json: {
+        modes: ['production'],
+        data: [liveEbayDeal],
+        count: 1,
+        productionCount: 1,
+        demoCount: 0,
+        separation: { production: 1, demo: 0 },
+      },
+    }),
+  );
+  await open(page, '/');
+
+  const liveCard = page.locator(
+    '[data-economics-surface="dashboard"][data-deal-id="listing:ebay:live-homepage-regression"]',
+  );
+  await expect(liveCard).toBeVisible();
+  await expect(liveCard).toContainText('LIVE SOURCE');
+  await expect(liveCard).toContainText('eBay Browse (live)');
+  await expect(liveCard).toContainText(
+    'Prismatic Evolutions Elite Trainer Box',
+  );
+  await expect(
+    page.getByText('Visible opportunities').locator('..'),
+  ).toContainText('1 live · 0 demo');
+  await expect(
+    page.getByText('Live source records').locator('..'),
+  ).toContainText('1');
+  await expect(page.getByText('eBay connected · 1 active asks')).toBeVisible();
+  await expect(
+    page.getByText('eBay awaiting its first authenticated listing scan'),
+  ).toHaveCount(0);
+
+  await open(page, '/marketplaces?source=ebay');
+  await expect(
+    page.getByRole('tab', { name: 'eBay', exact: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByRole('heading', { name: 'Live eBay listings' }),
+  ).toBeVisible();
+  await expect(
+    page.locator(
+      '[data-economics-surface="deals"][data-deal-id="listing:ebay:live-homepage-regression"]',
+    ),
+  ).toBeVisible();
 });
 
 test('Marktplaats Scout shows live metrics, local pickup and safe manual handoff', async ({
@@ -160,7 +331,7 @@ test('Marktplaats Scout shows live metrics, local pickup and safe manual handoff
   await page.route('**/api/marktplaats', (route) =>
     route.fulfill({ json: { data: marktplaatsDashboard } }),
   );
-  await open(page, '/marktplaats');
+  await open(page, '/marketplaces?source=marktplaats');
   await expect(page.getByText('Public monitor', { exact: true })).toBeVisible();
   await expect(page.getByText('15 minutes', { exact: true })).toBeVisible();
   await expect(
@@ -196,7 +367,7 @@ test('Marktplaats Scout clearly reports a blocked source and delayed retry', asy
       },
     }),
   );
-  await open(page, '/marktplaats');
+  await open(page, '/marketplaces?source=marktplaats');
   await expect(page.getByRole('heading', { name: 'Blocked' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('HTTP 403');
   await expect(page.getByText('Automatic retry')).toBeVisible();
@@ -479,7 +650,7 @@ test('portfolio export downloads reconciled and quoted accounting rows', async (
 test('source setup is connector-specific and Retailer Watch is registered', async ({
   page,
 }) => {
-  await open(page, '/sources?configure=ebay');
+  await open(page, '/marketplaces?source=connections&configure=ebay');
   const dialog = page.getByRole('dialog');
   await expect(
     dialog.getByRole('heading', { name: 'eBay Browse API' }),
@@ -613,7 +784,7 @@ test('missing eBay credentials are reported without a scraping fallback', async 
   };
   expect(payload.status).toBe('credentials_required');
   expect(payload.requirement).toContain('EBAY_CLIENT_ID');
-  await open(page, '/sources');
+  await open(page, '/marketplaces?source=connections');
   await expect(
     page
       .locator('.source-card')
@@ -667,7 +838,7 @@ test('representative visible actions produce navigation or observable state', as
   await page.getByRole('tab', { name: 'Compact table' }).click();
   await expect(page.locator('[data-release-view="table"]')).toBeVisible();
 
-  await open(page, '/sources');
+  await open(page, '/marketplaces?source=connections');
   await page.getByRole('button', { name: 'Test connection' }).first().click();
   await expect(page.getByRole('status').last()).toContainText(
     /Not connected|Connected/,

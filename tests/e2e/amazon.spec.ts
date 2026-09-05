@@ -14,17 +14,25 @@ async function open(page: Page, path: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/signin-with-chatgpt?return_to=%2Famazon');
-  await page.waitForURL('/amazon');
+  await page.goto(
+    '/signin-with-chatgpt?return_to=%2Fmarketplaces%3Fsource%3Damazon',
+  );
+  await page.waitForURL(/\/marketplaces\?source=amazon$/);
   await expect(page.locator('html')).toHaveAttribute(
     'data-scout-hydrated',
     'true',
   );
 });
 
-test('Amazon Scout page loads in Merchant Realms', async ({ page }) => {
+test('Amazon Scout tab loads in Marketplaces', async ({ page }) => {
   await expect(
-    page.getByRole('heading', { name: 'Amazon Scout' }),
+    page.getByRole('heading', { name: 'Marketplaces', level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('tab', { name: 'Amazon', exact: true }),
+  ).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByLabel('Amazon Scout status').getByRole('heading'),
   ).toBeVisible();
   await expect(
     page
@@ -143,7 +151,7 @@ test('Shadow Buy persists and appears in existing Shadow Mode', async ({
   const selector =
     '[data-economics-surface="shadow"][data-deal-id="amazon-fixture-prismatic-de"]';
   const before = await page.locator(selector).count();
-  await open(page, '/amazon');
+  await open(page, '/marketplaces?source=amazon');
   await page
     .locator(prismatic)
     .first()
