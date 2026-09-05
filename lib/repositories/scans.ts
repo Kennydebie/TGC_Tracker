@@ -1,6 +1,10 @@
 import { deals } from '../fixtures.ts';
 import { confidenceGrade, type Deal, type DealEconomics } from '../domain.ts';
 import {
+  ebayIdentityDataFromListing,
+  ebaySuppressionFingerprints,
+} from '../ebay/marketplace-account-deletion.ts';
+import {
   conservativeEconomicsForOffer,
   type MatchedOffer,
   type ScanSummary,
@@ -38,7 +42,11 @@ function scoreEconomics(record: MatchedOffer): {
   };
 }
 
-export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
+export async function persistScanSummary(
+  db: D1Database,
+  summary: ScanSummary,
+  options: { ebaySuppressionHmacSecret?: string } = {},
+) {
   for (const connector of summary.connectors) {
     const now = Date.parse(summary.finishedAt);
     const demoRecord = connector.source === 'fixture-market' ? 1 : 0;
@@ -88,22 +96,48 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
     for (const record of connector.records) {
       const rawJson = JSON.stringify(record.raw.payload);
       const payloadHash = await sha256(rawJson);
+      const sourceRecordId = `source-record:${connector.source}:${payloadHash}`;
+      let suppressionGuard = { sql: '1', bindings: [] as string[] };
+      if (connector.source === 'ebay') {
+        if (!options.ebaySuppressionHmacSecret)
+          throw new Error(
+            'EBAY_MARKETPLACE_DELETION_HMAC_SECRET is required before eBay records can be persisted.',
+          );
+        const fingerprints = ebaySuppressionFingerprints(
+          options.ebaySuppressionHmacSecret,
+          ebayIdentityDataFromListing({
+            payload: record.raw.payload,
+            seller: record.offer.seller,
+          }),
+        );
+        if (fingerprints.length) {
+          suppressionGuard = {
+            sql: `NOT EXISTS (
+              SELECT 1 FROM ebay_suppressed_identities
+              WHERE fingerprint IN (${fingerprints.map(() => '?').join(', ')})
+            )`,
+            bindings: fingerprints.map((item) => item.fingerprint),
+          };
+        }
+      }
       await db
         .prepare(
           `INSERT INTO source_records
             (id, source_id, source_listing_id, payload_json, payload_hash,
              captured_at, demo_record)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+           SELECT ?, ?, ?, ?, ?, ?, ?
+           WHERE ${suppressionGuard.sql}
            ON CONFLICT(source_id, payload_hash) DO NOTHING`,
         )
         .bind(
-          `source-record:${connector.source}:${payloadHash}`,
+          sourceRecordId,
           connector.source,
           record.offer.sourceListingId,
           rawJson,
           payloadHash,
           Date.parse(record.raw.capturedAt),
           demoRecord,
+          ...suppressionGuard.bindings,
         )
         .run();
 
@@ -156,7 +190,9 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
                item_price_cents, shipping_cents, currency, quantity, condition,
                language, match_confidence_bps, status, availability_status,
                detected_at, last_verified_at, first_seen_at, last_seen_at, demo_record)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM source_records WHERE id = ?)
+               AND ${suppressionGuard.sql}
              ON CONFLICT(source_id, external_id) DO UPDATE SET
                product_id = excluded.product_id,
                seller_name = excluded.seller_name,
@@ -199,13 +235,17 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
             Date.parse(record.offer.detectedAt),
             Date.parse(record.offer.lastVerifiedAt),
             demoRecord,
+            sourceRecordId,
+            ...suppressionGuard.bindings,
           ),
         db
           .prepare(
             `INSERT INTO listing_snapshots
               (id, listing_id, item_price_cents, shipping_cents, currency,
                availability_status, content_hash, observed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM listings WHERE id = ?)
+               AND ${suppressionGuard.sql}
              ON CONFLICT(listing_id, content_hash) DO UPDATE SET
                observed_at = excluded.observed_at`,
           )
@@ -218,6 +258,8 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
             record.offer.availabilityStatus,
             snapshotHash,
             Date.parse(record.offer.lastVerifiedAt),
+            listingId,
+            ...suppressionGuard.bindings,
           ),
         db
           .prepare(
@@ -225,7 +267,9 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
               (id, product_id, conservative_cents, fair_value_cents,
                optimistic_cents, confidence_grade, observation_count,
                assumptions_json, model_version, valued_at, demo_record)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM listings WHERE id = ?)
+               AND ${suppressionGuard.sql}
              ON CONFLICT(id) DO NOTHING`,
           )
           .bind(
@@ -247,6 +291,8 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
             economics.modelVersion,
             now,
             demoRecord,
+            listingId,
+            ...suppressionGuard.bindings,
           ),
         db
           .prepare(
@@ -257,7 +303,10 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
                profit_per_hour_cents, maximum_item_price_cents,
                maximum_all_in_cost_cents, preferred_exit, explanation_json,
                model_version, scored_at, demo_record)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM listings WHERE id = ?)
+               AND EXISTS (SELECT 1 FROM valuation_snapshots WHERE id = ?)
+               AND ${suppressionGuard.sql}
              ON CONFLICT(id) DO NOTHING`,
           )
           .bind(
@@ -287,6 +336,9 @@ export async function persistScanSummary(db: D1Database, summary: ScanSummary) {
             economics.modelVersion,
             now,
             demoRecord,
+            listingId,
+            valuationId,
+            ...suppressionGuard.bindings,
           ),
       ]);
     }

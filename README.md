@@ -115,10 +115,30 @@ No external connector is genuinely live in a clean checkout because no credentia
 - `GET /api/releases`
 - `GET /api/sources` and `POST /api/sources/:id/test`
 - `POST /api/scans/run`
+- `GET` and `POST /api/ebay/marketplace-account-deletion`
 - `GET /api/shadow`
 - `GET /api/portfolio/summary`
 - `GET /api/review` and `POST /api/review/:id/resolve`
 - `GET /api/health` and `GET /api/readiness`
+
+## eBay Production keyset compliance
+
+Production deployments expose an eBay Marketplace Account Deletion callback at
+`/api/ebay/marketplace-account-deletion`. Configure these server-side values in
+the deployment environment; never place them in browser code or commit them:
+
+- `EBAY_MARKETPLACE_DELETION_ENDPOINT`: the exact public HTTPS callback URL
+  entered in eBay's developer portal;
+- `EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN`: a private 32–80 character
+  token using letters, numbers, underscores or hyphens;
+- `EBAY_MARKETPLACE_DELETION_HMAC_SECRET`: a separate private secret used to
+  create irreversible suppression fingerprints.
+
+The endpoint answers eBay's challenge, verifies notification signatures over
+the exact received bytes, deletes seller-linked source records and derived
+listing data, and retains keyed suppression fingerprints so later scans cannot
+reintroduce a deleted identity. It never stores the notification's raw personal
+identifiers in its compliance receipt.
 
 ## Browser extension
 

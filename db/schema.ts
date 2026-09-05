@@ -78,6 +78,76 @@ export const sources = sqliteTable('sources', {
   ...timestamps,
 });
 
+export const ebayDeletionReceipts = sqliteTable('ebay_deletion_receipts', {
+  notificationId: text('notification_id').primaryKey(),
+  topic: text('topic').notNull(),
+  schemaVersion: text('schema_version').notNull(),
+  eventDate: integer('event_date', { mode: 'timestamp_ms' }).notNull(),
+  receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
+  processedAt: integer('processed_at', { mode: 'timestamp_ms' }),
+  status: text('status').notNull(),
+  countsJson: text('counts_json').notNull().default('{}'),
+  hmacKeyVersion: text('hmac_key_version').notNull().default('v1'),
+  processingToken: text('processing_token'),
+});
+
+export const ebaySuppressedIdentities = sqliteTable(
+  'ebay_suppressed_identities',
+  {
+    fingerprint: text('fingerprint').primaryKey(),
+    identityType: text('identity_type').notNull(),
+    hmacKeyVersion: text('hmac_key_version').notNull().default('v1'),
+    notificationId: text('notification_id')
+      .notNull()
+      .references(() => ebayDeletionReceipts.notificationId),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_ebay_suppressed_identity_type').on(table.identityType),
+  ],
+);
+
+export const ebayDeletionListingTargets = sqliteTable(
+  'ebay_deletion_listing_targets',
+  {
+    notificationId: text('notification_id')
+      .notNull()
+      .references(() => ebayDeletionReceipts.notificationId, {
+        onDelete: 'cascade',
+      }),
+    sourceListingId: text('source_listing_id').notNull(),
+    // An empty value represents a matching raw record that has no persisted
+    // listing. Keeping this non-null makes the composite target unique even in
+    // SQLite, where NULL values do not conflict with one another.
+    listingId: text('listing_id').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_ebay_deletion_listing_target').on(
+      table.notificationId,
+      table.sourceListingId,
+      table.listingId,
+    ),
+  ],
+);
+
+export const ebayDeletionValuationTargets = sqliteTable(
+  'ebay_deletion_valuation_targets',
+  {
+    notificationId: text('notification_id')
+      .notNull()
+      .references(() => ebayDeletionReceipts.notificationId, {
+        onDelete: 'cascade',
+      }),
+    valuationId: text('valuation_id').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_ebay_deletion_valuation_target').on(
+      table.notificationId,
+      table.valuationId,
+    ),
+  ],
+);
+
 export const scanRuns = sqliteTable(
   'scan_runs',
   {

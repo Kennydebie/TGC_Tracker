@@ -1,6 +1,12 @@
 declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
+    EBAY_CLIENT_ID?: string;
+    EBAY_CLIENT_SECRET?: string;
+    EBAY_MARKETPLACE?: string;
+    EBAY_MARKETPLACE_DELETION_ENDPOINT?: string;
+    EBAY_MARKETPLACE_DELETION_HMAC_SECRET?: string;
+    EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN?: string;
     MARKTPLAATS_ACCESS_MODE?: string;
     MARKTPLAATS_SCAN_INTERVAL_MINUTES?: string;
     MARKTPLAATS_SEARCH_QUERIES?: string;

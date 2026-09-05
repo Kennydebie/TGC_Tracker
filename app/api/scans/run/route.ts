@@ -1,4 +1,5 @@
 import { getD1 } from '@/db';
+import { env } from 'cloudflare:workers';
 import { getConnector, hasEbayCredentials } from '@/lib/connectors/registry';
 import { persistScanSummary } from '@/lib/repositories/scans';
 import { rejectCrossSiteMutation } from '@/lib/security';
@@ -41,7 +42,10 @@ export async function POST(request: Request) {
     queries,
     selectedConnector ? [selectedConnector] : undefined,
   );
-  await persistScanSummary(getD1(), summary);
+  await persistScanSummary(getD1(), summary, {
+    ebaySuppressionHmacSecret:
+      env.EBAY_MARKETPLACE_DELETION_HMAC_SECRET?.trim(),
+  });
   return Response.json(
     {
       data: {
