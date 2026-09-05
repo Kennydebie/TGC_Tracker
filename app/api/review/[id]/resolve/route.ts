@@ -12,30 +12,26 @@ export async function POST(
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   const { id } = await params;
-  let body: { resolution?: string; details?: Record<string, unknown> } = {};
+  const body = (await request.json()) as {
+    resolution?: string;
+    details?: Record<string, unknown>;
+  };
   try {
-    body = (await request.json()) as { resolution?: string };
-  } catch {
-    return Response.json({ error: 'JSON body required' }, { status: 400 });
-  }
-  if (!body.resolution)
-    return Response.json({ error: 'Resolution is required' }, { status: 400 });
-  try {
-    return Response.json({
-      dataMode: 'demo',
-      data: await resolveReviewItem(
-        getD1(),
-        user,
-        id,
-        body.resolution,
-        body.details ?? {},
-      ),
-    });
+    const data = await resolveReviewItem(
+      getD1(),
+      user,
+      id,
+      String(body.resolution ?? ''),
+      body.details ?? {},
+    );
+    return Response.json({ dataMode: 'production', data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Review failed';
     return Response.json(
-      { error: message },
-      { status: message.includes('not found') ? 404 : 400 },
+      {
+        error:
+          error instanceof Error ? error.message : 'Review resolution failed',
+      },
+      { status: 400 },
     );
   }
 }

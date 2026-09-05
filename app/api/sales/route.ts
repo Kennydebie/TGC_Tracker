@@ -19,28 +19,19 @@ export async function POST(request: Request) {
     !body.inventoryLotId ||
     !Number.isInteger(body.quantity) ||
     Number(body.quantity) < 1 ||
-    Number(body.quantity) > 10_000 ||
+    !body.venue?.trim() ||
     !Number.isFinite(body.gross) ||
     Number(body.gross) < 0 ||
-    Number(body.gross) > 1_000_000 ||
     !Number.isFinite(body.costs) ||
-    Number(body.costs) < 0 ||
-    Number(body.costs) > 1_000_000
+    Number(body.costs) < 0
   )
     return Response.json({ error: 'Invalid sale payload' }, { status: 400 });
-  try {
-    const data = await createSale(getD1(), user, {
-      inventoryLotId: body.inventoryLotId,
-      quantity: Number(body.quantity),
-      venue: String(body.venue ?? 'Other').slice(0, 80),
-      gross: Number(body.gross),
-      costs: Number(body.costs),
-    });
-    return Response.json({ dataMode: 'demo', data }, { status: 201 });
-  } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : 'Sale failed' },
-      { status: 400 },
-    );
-  }
+  const data = await createSale(getD1(), user, {
+    inventoryLotId: body.inventoryLotId,
+    quantity: Number(body.quantity),
+    venue: body.venue.trim().slice(0, 120),
+    gross: Number(body.gross),
+    costs: Number(body.costs),
+  });
+  return Response.json({ dataMode: 'production', data }, { status: 201 });
 }

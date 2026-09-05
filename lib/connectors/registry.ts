@@ -1,4 +1,3 @@
-import { FixtureConnector } from './fixtures.ts';
 import { EbayBrowseConnector } from './ebay.ts';
 import { MarktplaatsPublicConnector } from './marktplaats-public.ts';
 import type { SourceConnector } from './types.ts';
@@ -27,13 +26,6 @@ const marktplaatsPublic = new MarktplaatsPublicConnector({
 });
 
 export const connectorRegistry: ConnectorState[] = [
-  {
-    id: 'fixture-market',
-    enabled: true,
-    status: 'fixture',
-    requirement: 'None',
-    connector: new FixtureConnector(),
-  },
   {
     id: 'ebay',
     enabled: ebayEnabled,

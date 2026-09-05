@@ -5,8 +5,11 @@ import {
   allInCostWithinMaximum,
   calculateEconomics,
   confidenceGrade,
+  hasSupportedExitEvidence,
   itemPriceWithinMaximum,
+  serializeDealForPublicApi,
 } from '../lib/domain.ts';
+import { deals } from './fixtures/app-data.ts';
 import { validateSourceListingUrl } from '../lib/listing-url.ts';
 import {
   detectMisleadingTitle,
@@ -39,6 +42,36 @@ const baseInput = {
   expectedHoldingDays: 30,
   requiredProfit: 25,
 };
+
+void test('withholds unsupported exit economics from public deal payloads', () => {
+  const economics = calculateEconomics({
+    ...baseInput,
+    expectedSalePrice: 0,
+    sellerFees: 0,
+    exitPaymentFees: 0,
+    outboundShipping: 0,
+    packaging: 0,
+    expectedReturnLoss: 0,
+    sellingLabor: 0,
+    liquidityHaircut: 0,
+  });
+  assert.equal(hasSupportedExitEvidence(economics), false);
+  const payload = serializeDealForPublicApi({
+    ...deals[0],
+    dataMode: 'production',
+    sellerScore: 0,
+    economics,
+  });
+  assert.equal(payload.exitEvidenceSupported, false);
+  assert.equal(payload.sellerScore, null);
+  assert.equal(payload.instantScore, null);
+  assert.equal(payload.riskScore, null);
+  assert.equal(payload.economics.expectedSalePrice, null);
+  assert.equal(payload.economics.conservativeProfit, null);
+  assert.equal(payload.economics.roi, null);
+  assert.equal(payload.economics.maximumAllInCost, null);
+  assert.equal(payload.economics.itemPrice, economics.itemPrice);
+});
 
 void test('calculates all-in cost, conservative net exit, profit and maximum item price', () => {
   const result = calculateEconomics(baseInput);

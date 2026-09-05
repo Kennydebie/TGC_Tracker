@@ -1,5 +1,5 @@
 import { getD1 } from '@/db';
-import { deals } from '@/lib/fixtures';
+import { listProductionDeals } from '@/lib/repositories/scans';
 import {
   createPurchase,
   listInventoryLots,
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   return Response.json({
-    dataMode: 'demo',
+    dataMode: 'production',
     data: await listInventoryLots(getD1(), user),
   });
 }
@@ -28,8 +28,11 @@ export async function POST(request: Request) {
     acquisitionCosts?: number;
     strategy?: string;
   };
-  const deal = deals.find((item) => item.id === body.dealId);
-  if (!deal) return Response.json({ error: 'Deal not found' }, { status: 404 });
+  const deal = (await listProductionDeals(getD1())).find(
+    (item) => item.id === body.dealId,
+  );
+  if (!deal)
+    return Response.json({ error: 'Live deal not found' }, { status: 404 });
   if (
     !Number.isInteger(body.quantity) ||
     Number(body.quantity) < 1 ||
@@ -52,5 +55,5 @@ export async function POST(request: Request) {
     acquisitionCosts: Number(body.acquisitionCosts),
     strategy: String(body.strategy ?? 'Quick flip').slice(0, 80),
   });
-  return Response.json({ dataMode: 'demo', data }, { status: 201 });
+  return Response.json({ dataMode: 'production', data }, { status: 201 });
 }

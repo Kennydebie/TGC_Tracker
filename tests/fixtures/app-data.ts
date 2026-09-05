@@ -3,7 +3,7 @@ import {
   type Deal,
   type ReleaseEvent,
   type SourceStatus,
-} from './domain.ts';
+} from '../../lib/domain.ts';
 
 const deal = (
   value: Omit<Deal, 'economics'> & {

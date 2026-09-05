@@ -50,6 +50,13 @@
       "when": 1788611914467,
       "tag": "0006_overconfident_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788631845516,
+      "tag": "0007_remove_non_production_records",
+      "breakpoints": true
     }
   ]
 }

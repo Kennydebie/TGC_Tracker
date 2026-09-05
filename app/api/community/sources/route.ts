@@ -1,7 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { isCommunityAdmin } from '@/lib/discord-setup';
 import { rejectCrossSiteMutation } from '@/lib/security';
-import { communityFixtureDashboard } from '@/lib/fixtures-community';
 import { getD1 } from '@/db';
 import {
   listCommunityDashboard,
@@ -23,7 +22,15 @@ const CATEGORY_ALLOWLIST = new Set([
 
 export async function GET(request: Request) {
   if (!isCommunityAdmin(request, env.COMMUNITY_ADMIN_EMAIL))
-    return Response.json({ data: communityFixtureDashboard().sources });
+    return Response.json(
+      {
+        data: [],
+        status: 'owner_sign_in_required',
+        message:
+          'Sign in as the app owner to view production community sources.',
+      },
+      { headers: { 'cache-control': 'private, no-store' } },
+    );
   const dashboard = await listCommunityDashboard(getD1(), {
     redditCredentialsAvailable: false,
     discordCredentialsAvailable: false,

@@ -8,7 +8,7 @@ Before publishing:
 
 1. configure secrets in the hosting environment, never in Git;
 2. run the migration in `drizzle/`;
-3. keep Demo Mode and production records in separate databases;
+3. confirm `0007_remove_non_production_records.sql` has removed legacy demo and fixture rows from an existing database;
 4. run all validation commands from the README;
 5. verify `/api/health` and `/api/readiness`;
 6. verify missing-credential states before enabling a connector.
@@ -33,6 +33,6 @@ npm run community:discord:cloudflare:deploy
 
 - Node engine warning: use Node 22.13+.
 - Missing Windows native binding: run `npm ci --include=optional` with the dev server stopped.
-- D1 unavailable locally: use Demo Mode; Sites injects `DB` during deployed operation.
+- D1 unavailable locally: expect explicit empty/unavailable states; Sites injects `DB` during deployed operation.
 - Connector says credentials required: configure only the named server-side variables and run the source test endpoint.
-- Parser format change: leave the source paused, inspect Review Queue, update the fixture contract, and only then re-enable.
+- Parser format change: leave the source paused, inspect Review Queue, update the isolated test contract, and only then re-enable.

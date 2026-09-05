@@ -334,11 +334,7 @@ export function CommunityRadar({
             Market evidence and conservative economics remain authoritative.
           </p>
           <div className="community-mode-row">
-            <Badge variant="outline">
-              {dashboard.dataMode === 'fixture'
-                ? 'FICTIONAL FIXTURE DATA · isolated'
-                : 'PRODUCTION DERIVED SIGNALS'}
-            </Badge>
+            <Badge variant="outline">PRODUCTION DERIVED SIGNALS</Badge>
             <Badge variant="outline">NO COMMUNITY-ONLY BUY ALERTS</Badge>
           </div>
         </div>

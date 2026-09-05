@@ -1,5 +1,5 @@
 import { getD1 } from '@/db';
-import { deals } from '@/lib/fixtures';
+import { listProductionDeals } from '@/lib/repositories/scans';
 import { setTrackedDeal } from '@/lib/repositories/user-state';
 import { rejectCrossSiteMutation } from '@/lib/security';
 import { authenticationRequired, getRequestUser } from '@/lib/server/user';
@@ -14,12 +14,15 @@ async function update(
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   const { id } = await params;
-  const deal = deals.find((item) => item.id === id);
-  if (!deal) return Response.json({ error: 'Deal not found' }, { status: 404 });
+  const deal = (await listProductionDeals(getD1())).find(
+    (item) => item.id === id,
+  );
+  if (!deal)
+    return Response.json({ error: 'Live deal not found' }, { status: 404 });
   return Response.json({
+    dataMode: 'production',
     dealId: id,
     tracked: await setTrackedDeal(getD1(), user, deal, tracked),
-    dataMode: 'demo',
   });
 }
 

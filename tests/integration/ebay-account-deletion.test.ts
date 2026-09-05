@@ -370,7 +370,7 @@ void test('account deletion processing is source-scoped, idempotent, and prevent
                 seller: 'SELLER-A',
                 available: true,
               },
-              dealId: 'pe-etb-pair',
+              productIdentityId: 'pokemon-prismatic-evolutions-etb',
               matchConfidence: 95,
               rejectedReason: null,
               alerted: false,

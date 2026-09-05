@@ -1,16 +1,12 @@
 {
   "manifest_version": 3,
   "name": "TCG Scout Safe Handoff",
-  "version": "0.1.0",
-  "description": "Validates a short-lived TCG Scout cart intent and opens the approved product page. Never submits checkout or payment.",
+  "version": "0.1.1",
+  "description": "Checks a short-lived TCG Scout cart intent and opens an allowlisted marketplace. Never submits checkout or payment.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "TCG Scout handoff"
   },
   "permissions": ["tabs"],
-  "host_permissions": [
-    "https://demo.invalid/*",
-    "https://www.ebay.nl/*",
-    "https://www.cardmarket.com/*"
-  ]
+  "host_permissions": ["https://www.ebay.nl/*", "https://www.cardmarket.com/*"]
 }

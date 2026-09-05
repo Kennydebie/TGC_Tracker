@@ -1,8 +1,4 @@
-const allowedDomains = new Set([
-  'demo.invalid',
-  'www.ebay.nl',
-  'www.cardmarket.com',
-]);
+const allowedDomains = new Set(['www.ebay.nl', 'www.cardmarket.com']);
 
 type CartIntent = {
   domain: string;
@@ -13,7 +9,6 @@ type CartIntent = {
   quantity: number;
   expiresAt: number;
   nonce: string;
-  demo: boolean;
 };
 
 function base64Url(bytes: Uint8Array): string {
@@ -26,8 +21,8 @@ function base64Url(bytes: Uint8Array): string {
 }
 
 export async function createCartToken(
-  intent: Omit<CartIntent, 'expiresAt' | 'nonce' | 'demo'>,
-  secret?: string,
+  intent: Omit<CartIntent, 'expiresAt' | 'nonce'>,
+  secret: string,
 ): Promise<{ token: string; intent: CartIntent }> {
   if (!allowedDomains.has(intent.domain))
     throw new Error('Domain is not allowlisted');
@@ -41,12 +36,10 @@ export async function createCartToken(
     ...intent,
     expiresAt: Date.now() + 5 * 60_000,
     nonce: crypto.randomUUID(),
-    demo: !secret,
   };
   const encoded = new TextEncoder().encode(JSON.stringify(payload));
   const payloadPart = base64Url(encoded);
-  if (!secret)
-    return { token: `demo.${payloadPart}.unsigned`, intent: payload };
+  if (!secret.trim()) throw new Error('A signing secret is required');
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),

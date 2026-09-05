@@ -20,11 +20,11 @@ Connector failures are isolated. Raw active asks remain distinct from verified t
 
 - D1: relational state, source runs, listing snapshots, evidence, valuations, alerts, watchlists, shadow trades and accounting.
 - R2: reserved for future lot/card image uploads and receipt binaries; not enabled in this MVP.
-- Browser state: temporary filters, open dialogs and Demo Mode interaction only; not authoritative user data.
+- Browser state: temporary filters and open-dialog input only; not authoritative user data.
 
 ## Worker model
 
-The deployable web application is itself a Cloudflare Worker through `@openai/sites-vite-plugin`. `scripts/run-worker.mjs` is a fixture-backed local scan runner that demonstrates structured job logs. Production scheduling should invoke the scan service from a Cloudflare Cron or queue consumer and persist each run in `scan_runs`.
+The deployable web application is itself a Cloudflare Worker through `@openai/sites-vite-plugin`. `scripts/run-worker.mjs` runs configured production connectors and emits structured job logs; it does not substitute fixture results when credentials or sources are unavailable. Production scheduling should invoke the scan service from a Cloudflare Cron or queue consumer and persist each run in `scan_runs`.
 
 ## Security boundaries
 

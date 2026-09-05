@@ -1463,12 +1463,12 @@ body::after {
   justify-content: flex-end;
   gap: 0.48rem;
 }
-.demo-badge {
+.production-badge {
   border: 1px solid #765c9d;
   color: #d5c5ed;
   background: rgb(118 92 157 / 16%);
 }
-.demo-badge svg {
+.production-badge svg {
   width: 12px;
 }
 .currency-select {
@@ -3885,7 +3885,7 @@ body::after {
   .topbar {
     grid-template-columns: minmax(160px, auto) minmax(190px, 1fr) auto;
   }
-  .demo-badge,
+  .production-badge,
   .account-copy,
   .account-chip > svg {
     display: none;
@@ -4242,7 +4242,7 @@ body::after {
   .card-actions button {
     flex: 1;
   }
-  .top-actions .demo-badge {
+  .top-actions .production-badge {
     display: none;
   }
   .command-copy {

@@ -215,8 +215,53 @@ export function confidenceGrade(
   return 'D';
 }
 
+export function hasSupportedExitEvidence(economics: DealEconomics): boolean {
+  return (
+    Number.isFinite(economics.expectedSalePrice) &&
+    economics.expectedSalePrice > 0 &&
+    Number.isFinite(economics.conservativeNetExit) &&
+    economics.conservativeNetExit > 0
+  );
+}
+
+export function serializeDealForPublicApi(deal: Deal) {
+  const sellerScore = deal.sellerScore > 0 ? deal.sellerScore : null;
+  if (hasSupportedExitEvidence(deal.economics))
+    return { ...deal, sellerScore, exitEvidenceSupported: true as const };
+
+  return {
+    ...deal,
+    sellerScore,
+    instantScore: null,
+    holdScore: null,
+    riskScore: null,
+    exitEvidenceSupported: false as const,
+    economics: {
+      ...deal.economics,
+      expectedSalePrice: null,
+      sellerFees: null,
+      exitPaymentFees: null,
+      outboundShipping: null,
+      packaging: null,
+      expectedReturnLoss: null,
+      sellingLabor: null,
+      liquidityHaircut: null,
+      estimatedHours: null,
+      expectedHoldingDays: null,
+      conservativeNetExit: null,
+      conservativeProfit: null,
+      roi: null,
+      profitPerHour: null,
+      capitalVelocity: null,
+      maximumItemPrice: null,
+      maximumAllInCost: null,
+    },
+  };
+}
+
 export function qualifiesForQuickFlip(deal: Deal): boolean {
   return (
+    hasSupportedExitEvidence(deal.economics) &&
     deal.matchConfidence >= QUICK_FLIP_GATE.matchConfidence &&
     deal.economics.conservativeProfit >= QUICK_FLIP_GATE.minimumProfit &&
     deal.economics.roi >= QUICK_FLIP_GATE.minimumRoi &&

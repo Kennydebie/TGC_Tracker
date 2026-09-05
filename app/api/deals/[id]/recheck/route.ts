@@ -1,6 +1,5 @@
 import { getD1 } from '@/db';
 import { getConnector } from '@/lib/connectors/registry';
-import { deals } from '@/lib/fixtures';
 import { validateSourceListingUrl } from '@/lib/listing-url';
 import { rejectCrossSiteMutation } from '@/lib/security';
 
@@ -11,23 +10,6 @@ export async function POST(
   const blocked = rejectCrossSiteMutation(request);
   if (blocked) return blocked;
   const { id } = await params;
-  const deal = deals.find((item) => item.id === id);
-  if (deal) {
-    validateSourceListingUrl(deal.sourceMarketplace, deal.sourceListingUrl);
-    return Response.json({
-      dataMode: 'demo',
-      dealId: id,
-      availabilityStatus: deal.availabilityStatus,
-      lastVerifiedAt: new Date().toISOString(),
-      observedItemPrice: deal.economics.itemPrice,
-      observedShipping: deal.economics.inboundShipping,
-      observedAllInCost: deal.economics.allInCost,
-      sourceListingUrl: deal.sourceListingUrl,
-      priceChanged: false,
-      shippingChanged: false,
-    });
-  }
-
   const db = getD1();
   const listing = await db
     .prepare(
@@ -80,13 +62,14 @@ export async function POST(
       });
     }
     const itemPriceCents = Math.round(current.itemPrice * 100);
-    const shippingCents = Math.round((current.shipping ?? 0) * 100);
+    const shippingCents =
+      current.shipping === null ? null : Math.round(current.shipping * 100);
     validateSourceListingUrl(
       current.sourceMarketplace,
       current.sourceListingUrl,
     );
     const priceChanged = itemPriceCents !== listing.item_price_cents;
-    const shippingChanged = shippingCents !== (listing.shipping_cents ?? 0);
+    const shippingChanged = shippingCents !== listing.shipping_cents;
     const availabilityStatus = priceChanged
       ? 'price_changed'
       : shippingChanged
@@ -136,8 +119,9 @@ export async function POST(
       availabilityStatus,
       lastVerifiedAt: checkedAt,
       observedItemPrice: current.itemPrice,
-      observedShipping: current.shipping ?? 0,
-      observedAllInCost: current.itemPrice + (current.shipping ?? 0),
+      observedShipping: current.shipping,
+      observedAllInCost:
+        current.shipping === null ? null : current.itemPrice + current.shipping,
       sourceListingUrl: current.sourceListingUrl,
       priceChanged,
       shippingChanged,

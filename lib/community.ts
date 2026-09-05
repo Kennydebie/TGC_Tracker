@@ -241,6 +241,51 @@ export type CommunityDashboard = {
   };
 };
 
+export function emptyCommunityDashboard(
+  options: {
+    generatedAt?: string;
+    reddit?: CommunityDashboard['reddit'];
+    discord?: CommunityDashboard['discord'];
+    sources?: CommunitySourceStatus[];
+  } = {},
+): CommunityDashboard {
+  return {
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    dataMode: 'production',
+    reddit: options.reddit ?? {
+      connected: false,
+      status: 'credentials_required',
+      detail: 'Reddit API credentials are required before signals can load.',
+    },
+    discord: options.discord ?? {
+      connected: false,
+      status: 'bot_required',
+      detail:
+        'A configured Discord listener is required before signals can load.',
+    },
+    metrics: {
+      signals24h: 0,
+      productsTrending: 0,
+      earlySignals: 0,
+      confirmedDeals: 0,
+      highHypeRiskProducts: 0,
+      bestLeadTimeSource: null,
+    },
+    products: [],
+    recentSignals: [],
+    sources: options.sources ?? [],
+    performance: {
+      signalsDetected: 0,
+      verifiedRate: null,
+      falseSignalRate: null,
+      medianVerificationMinutes: null,
+      medianLeadMinutes: null,
+      profitableConfirmedRate: null,
+      averagePriceMove24h: null,
+    },
+  };
+}
+
 export type MomentumInput = {
   mentionVelocity: number;
   uniqueAuthors: number;

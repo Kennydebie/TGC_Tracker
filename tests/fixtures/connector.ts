@@ -7,7 +7,7 @@ import type {
   SourceConnector,
   SourcePolicy,
   ValidationResult,
-} from './types.ts';
+} from '../../lib/connectors/types.ts';
 
 const fixtureRecords: RawSourceRecord[] = [
   {

@@ -2,7 +2,7 @@
 
 TCG Scout is a dark-fantasy market-intelligence workspace for trading-card collectors and resellers. Its core is a conservative acquisition underwriter: it identifies a listing, calculates its complete cost, selects a credible exit, discounts the evidence for risk and liquidity, and only promotes opportunities that survive those checks.
 
-The current repository is a functional Demo Mode MVP. It includes the complete responsive application shell and product routes, deterministic financial logic, fixture scanning, source-adapter contracts, D1 schema and migration, API routes, Shadow Mode, collection underwriting, portfolio semantics, a safe handoff extension, and automated unit/integration tests. Demo data is fictional and visibly isolated.
+The application now runs in production-only mode. User-facing pages and APIs read production D1 records or authorized live sources and show an explicit empty or unavailable state when evidence is missing. No runtime fixture connector, fictional listing fallback or demo seed is used. Deterministic fixtures remain under `tests/fixtures/` solely for automated tests and are never loaded by the deployed application.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ npm run db:generate
 npm run dev
 ```
 
-Open `http://localhost:3000`. Local Sites sign-in is supplied by the scaffold; Demo Mode does not require marketplace credentials.
+Open `http://localhost:3000`. Local Sites sign-in is supplied by the scaffold. A clean checkout starts with honest empty states until its D1 binding and relevant marketplace credentials are configured.
 
 If PowerShell resolves an older Node installation, put a Node 22+ binary first on `PATH` before running npm scripts.
 
@@ -35,7 +35,7 @@ Web application:
 npm run dev
 ```
 
-One fixture-backed worker scan with structured logs:
+One credentialed eBay worker scan with structured logs:
 
 ```powershell
 npm run worker
@@ -64,21 +64,14 @@ Production Worker preview after a build:
 npm run start
 ```
 
-## Demo Mode
+## Production-only data policy
 
-Demo Mode is on by default and requires no secrets. It includes:
-
-- one strict quick-flip candidate;
-- one cross-border opportunity;
-- one apparent discount rejected after fees;
-- one empty-box trap;
-- one low-confidence mixed binder lot;
-- official and unconfirmed release records with visibly different labels;
-- source credential and parser-failure states;
-- profitable, loss-making and dead-inventory portfolio examples;
-- losing Shadow Mode outcomes that cannot be hidden.
-
-The browser UI reads deterministic fixtures from `lib/fixtures.ts`. The same domain rules back typed APIs under `app/api`. The disposable SQL seed is `db/seed-demo.sql`; never apply it to a production database.
+- Runtime pages and APIs return only records marked as production.
+- Active listing asks, completed-sale evidence and modelled values remain separate. Missing completed-sale or exit evidence is shown as unavailable rather than converted into fictional profit or ROI.
+- A clean database does not receive seeded listings, alerts, releases, holdings, watch events, scanner results or community signals.
+- Deterministic test records live only in `tests/fixtures/` and are injected explicitly by tests.
+- `drizzle/0007_remove_non_production_records.sql` removes legacy demo and fixture records from an existing D1 database while preserving production records.
+- Marketplace credentials and signing secrets belong in server-side deployment secrets; none are committed or exposed to browser code.
 
 ## Database
 
@@ -94,16 +87,17 @@ Sites owns the real D1 resource and injects the `DB` binding declared in `.opena
 
 ## Source status
 
-| Source                  | Current implementation                         | Credentials                            | Important limitation                                          |
-| ----------------------- | ---------------------------------------------- | -------------------------------------- | ------------------------------------------------------------- |
-| Demo marketplace        | Working fixture connector                      | None                                   | Fictional and isolated                                        |
-| eBay Browse             | Official API connector and response normalizer | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | Active listings only; no universal checkout; not called in CI |
-| Cardmarket public files | Streaming price-guide parser and URL allowlist | Official download URLs                 | Daily reference data, not a live restock feed                 |
-| Marktplaats             | Disabled setup state                           | Authorized OAuth credentials           | No unauthorized scraping fallback                             |
-| TCGplayer               | Disabled registry entry                        | Existing developer key only            | The app does not depend on it                                 |
-| Retailer adapters       | Fixture health states                          | Per-retailer allowlisted configuration | No CAPTCHA bypass or disguised scraping                       |
+| Source                  | Current implementation                               | Credentials                            | Important limitation                                                |
+| ----------------------- | ---------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| eBay Browse             | Official API connector and response normalizer       | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | Active asks only; no completed-sales feed or automated checkout     |
+| Amazon                  | Official Keepa API integration                       | `KEEPA_API_KEY`                        | Requires paid Keepa access and server-side scheduled ingestion      |
+| Marktplaats             | Conservative public search-page monitor              | Public-monitor settings                | Stops on CAPTCHA, HTTP 403/429 or unexpected page changes           |
+| Cardmarket public files | Streaming catalogue/price-guide parser and allowlist | Official download URLs                 | Daily reference data, not a live restock feed                       |
+| Reddit                  | Official OAuth API integration                       | Reddit OAuth credentials               | Only explicitly configured communities are ingested                 |
+| Discord                 | Official bot and allowlisted channel listener        | Bot and ingestion secrets              | Requires the separate Docker or Cloudflare listener to stay running |
+| Retailer adapters       | Disabled until an authorized adapter is configured   | Allowlisted configuration              | No CAPTCHA bypass, disguised scraping or unauthorized API fallback  |
 
-No external connector is genuinely live in a clean checkout because no credentials are committed. This is intentional and is reflected in the UI.
+No connector credentials are committed. Missing configuration is reported in the UI instead of being replaced with generated records.
 
 ## API surface
 
@@ -112,9 +106,14 @@ No external connector is genuinely live in a clean checkout because no credentia
 - `POST /api/deals/:id/shadow-buy`
 - `POST /api/deals/:id/prepare-cart`
 - `POST /api/deals/:id/ignore`
+- `GET /api/watchlist` and `PUT`/`DELETE /api/watchlist/:id`
+- `GET` and `PUT /api/alert-rules`
+- `POST /api/purchases` and `POST /api/sales`
 - `GET /api/releases`
 - `GET /api/sources` and `POST /api/sources/:id/test`
 - `POST /api/scans/run`
+- `GET /api/amazon` plus Amazon watch and Shadow Mode actions
+- `GET /api/community` plus authorized Reddit and Discord ingestion routes
 - `GET` and `POST /api/ebay/marketplace-account-deletion`
 - `GET /api/shadow`
 - `GET /api/portfolio/summary`
@@ -144,7 +143,7 @@ identifiers in its compliance receipt.
 
 `npm run extension:build` writes unpacked files to `dist-extension/`. In Chrome/Edge, open the extensions page, enable Developer mode, and load that directory.
 
-The extension validates token shape, expiration, allowlisted domain, identity, quantity and expected price before opening a supported domain. The MVP deliberately stops before cart manipulation. It never places bids, accepts offers, submits an order or handles payment data.
+The extension accepts only the production `v1` signed-token envelope, then validates token shape, expiration, allowlisted domain, identity, quantity and expected price before opening a supported domain. Legacy unsigned demo tokens and fictional domains are rejected. The extension deliberately stops before cart manipulation. It never places bids, accepts offers, submits an order or handles payment data.
 
 ## Architecture and operating guides
 
@@ -157,15 +156,16 @@ The extension validates token shape, expiration, allowlisted domain, identity, q
 
 ## Known limitations
 
-- The product UI is fully interactive in Demo Mode, but durable write actions are not yet wired from every client control to D1.
-- Marktplaats is intentionally disabled without authorized credentials.
+- A new or unconfigured deployment is intentionally sparse: no example opportunities, holdings, signals or outcomes are generated.
+- eBay Browse provides active asks, not completed-sale evidence. Profit and ROI remain unavailable until supported exit evidence exists.
+- The Marktplaats public monitor pauses on access challenges or unexpected markup and never attempts to bypass them.
 - Cardmarket catalogue ingestion needs the real official file URLs and a scheduled deployment job.
-- The collection scanner demonstrates the review and underwriting workflow; production OCR/image classification and R2 upload storage are not included.
-- Forecast scenarios are interpretable fixture scenarios, not a trained forecasting service.
-- The safe-handoff extension validates and opens an allowlisted domain but does not add products to a real cart.
+- Production OCR/image classification and R2 upload storage are not included.
+- Forecast values are not produced without a supported model and traceable inputs.
+- The safe-handoff extension is built and production-token-only, but the web app keeps cart preparation unavailable until a production marketplace flow is implemented.
 - Live marketplace behavior and end-to-end browser tests require credentials and a deployed environment; CI never calls marketplaces.
 
-The next highest-value step is to wire the existing D1 repository into watchlist, Shadow Mode and portfolio write APIs, then validate the eBay connector in a credentialed staging environment while collecting 30–60 days of Shadow Mode calibration data.
+The next highest-value step is to accumulate traceable production observations and completed-sale evidence, then calibrate Shadow Mode against real outcomes before expanding automated recommendations.
 
 Discord setup, server permissions, and the Cloudflare/Docker listener options:
 [Connection guide](docs/discord-connection.md).

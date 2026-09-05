@@ -1,5 +1,5 @@
 import { getD1 } from '@/db';
-import { deals } from '@/lib/fixtures';
+import { listProductionDeals } from '@/lib/repositories/scans';
 import { createShadowTrade } from '@/lib/repositories/user-state';
 import { rejectCrossSiteMutation } from '@/lib/security';
 import { authenticationRequired, getRequestUser } from '@/lib/server/user';
@@ -13,13 +13,23 @@ export async function POST(
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   const { id } = await params;
-  const deal = deals.find((item) => item.id === id);
-  if (!deal) return Response.json({ error: 'Deal not found' }, { status: 404 });
-  return Response.json(
-    {
-      dataMode: 'demo',
-      data: await createShadowTrade(getD1(), user, deal),
-    },
-    { status: 201 },
+  const deal = (await listProductionDeals(getD1())).find(
+    (item) => item.id === id,
   );
+  if (!deal)
+    return Response.json({ error: 'Live deal not found' }, { status: 404 });
+  try {
+    return Response.json(
+      {
+        dataMode: 'production',
+        data: await createShadowTrade(getD1(), user, deal),
+      },
+      { status: 201 },
+    );
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : 'Shadow trade failed' },
+      { status: 409 },
+    );
+  }
 }

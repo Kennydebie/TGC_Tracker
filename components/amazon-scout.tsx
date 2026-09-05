@@ -41,7 +41,7 @@ import { filterHistoryPoints } from '@/lib/workflow-integrity';
 const emptyDashboard: AmazonDashboard = {
   sourceState: 'key_required',
   apiConnected: false,
-  dataMode: 'fixture',
+  dataMode: 'production',
   keyAvailable: false,
   reason: 'Loading Amazon Scout source state…',
   markets: DEFAULT_AMAZON_MARKETS,
@@ -141,7 +141,16 @@ export function AmazonScout() {
       })
       .then((payload) => {
         if (cancelled) return;
-        setDashboard(payload.data);
+        const productionOpportunities = payload.data.opportunities.filter(
+          (item) => item.dataMode === 'production',
+        );
+        const reason = payload.data.reason;
+        setDashboard({
+          ...payload.data,
+          dataMode: 'production',
+          opportunities: productionOpportunities,
+          reason,
+        });
         setWatchRules(payload.watchRules ?? []);
       })
       .catch((reason) => {
@@ -279,9 +288,11 @@ export function AmazonScout() {
                 : 'API not connected'}
             </Badge>
             <Badge variant="outline">
-              {dashboard.dataMode === 'fixture'
-                ? 'FIXTURE DATA · isolated'
-                : 'PRODUCTION DATA'}
+              {loading
+                ? 'LOADING LIVE DATA'
+                : dashboard.opportunities.length
+                  ? 'PRODUCTION DATA'
+                  : 'NO LIVE RECORDS'}
             </Badge>
           </div>
           {dashboard.reason ? (
@@ -476,7 +487,7 @@ export function AmazonScout() {
                     <td>
                       {offer
                         ? `${price(offer.shipping)} · ${offer.shippingStatus}`
-                        : 'No fixture observation'}
+                        : 'Not observed'}
                     </td>
                     <td>{price(offer?.deliveredPrice ?? null)}</td>
                     <td>{offer?.sellerType.replaceAll('_', ' ') ?? '—'}</td>
@@ -565,8 +576,8 @@ export function AmazonScout() {
         <p>
           Keepa timestamps are not checkout guarantees. TCG Scout never buys,
           selects quantity, submits payment, or treats an active
-          Amazon/Cardmarket ask as completed-sale evidence. Fixture exit values
-          are modelled and explicitly isolated from production evidence.
+          Amazon/Cardmarket ask as completed-sale evidence. Modelled exits are
+          estimates and remain separate from observed offers.
         </p>
       </section>
     </div>
@@ -684,9 +695,7 @@ function AmazonOpportunityCard({
         </div>
         <div className="amazon-card-badges">
           <Badge>{item.score} OPPORTUNITY</Badge>
-          <Badge variant="outline">
-            {item.dataMode === 'fixture' ? 'FIXTURE' : 'PRODUCTION'}
-          </Badge>
+          <Badge variant="outline">PRODUCTION</Badge>
         </div>
       </div>
       <div className="amazon-price-hero">

@@ -1,5 +1,6 @@
+import { env } from 'cloudflare:workers';
+
 import { getD1 } from '@/db';
-import { amazonFixtureDashboard } from '@/lib/fixtures-amazon';
 import {
   createAmazonShadowTrade,
   listAmazonDashboard,
@@ -20,15 +21,11 @@ export async function POST(request: Request) {
       { error: 'Amazon opportunity id is required.' },
       { status: 400 },
     );
-  const fixture = amazonFixtureDashboard().opportunities.find(
-    (item) => item.id === body.id,
+  const opportunity = (
+    await listAmazonDashboard(getD1(), Boolean(env.KEEPA_API_KEY?.trim()))
+  ).opportunities.find(
+    (item) => item.id === body.id && item.dataMode === 'production',
   );
-  const production = fixture
-    ? null
-    : (await listAmazonDashboard(getD1(), true)).opportunities.find(
-        (item) => item.id === body.id && item.dataMode === 'production',
-      );
-  const opportunity = fixture ?? production;
   if (!opportunity)
     return Response.json(
       { error: 'Amazon opportunity not found.' },

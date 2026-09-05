@@ -7,14 +7,17 @@ import type {
   RawSourceRecord,
   SourceConnector,
 } from '../connectors/types.ts';
-import { calculateEconomics, qualifiesForQuickFlip } from '../domain.ts';
-import { deals } from '../fixtures.ts';
+import { calculateEconomics } from '../domain.ts';
 import { detectMisleadingTitle } from '../normalisation.ts';
+import {
+  PRODUCT_IDENTITIES,
+  type ProductIdentity,
+} from '../product-identities.ts';
 
 export type MatchedOffer = {
   raw: RawSourceRecord;
   offer: NormalisedOffer;
-  dealId: string | null;
+  productIdentityId: string | null;
   matchConfidence: number;
   rejectedReason: string | null;
   alerted: boolean;
@@ -73,23 +76,36 @@ function tokens(value: string) {
 
 export function matchNormalisedOffer(offer: NormalisedOffer) {
   const offerTokens = tokens(offer.title);
-  let best: { dealId: string; confidence: number } | null = null;
-  for (const deal of deals) {
-    const canonicalTokens = tokens(
-      `${deal.canonicalProduct} ${deal.set} ${deal.productType}`,
+  let best: { productIdentityId: string; confidence: number } | null = null;
+  for (const identity of PRODUCT_IDENTITIES) {
+    if (!identity.requiredTokens.every((token) => offerTokens.has(token)))
+      continue;
+    const confidence = productIdentityLabels(identity).reduce(
+      (highest, label) => {
+        const identityTokens = tokens(label);
+        const matches = [...identityTokens].filter((token) =>
+          offerTokens.has(token),
+        ).length;
+        if (matches < 2) return highest;
+        const denominator = Math.max(
+          1,
+          Math.min(offerTokens.size, identityTokens.size),
+        );
+        return Math.max(highest, Math.round((matches / denominator) * 100));
+      },
+      0,
     );
-    const matches = [...canonicalTokens].filter((token) =>
-      offerTokens.has(token),
-    ).length;
-    const denominator = Math.max(
-      1,
-      Math.min(offerTokens.size, canonicalTokens.size),
-    );
-    const confidence = Math.round((matches / denominator) * 100);
     if (!best || confidence > best.confidence)
-      best = { dealId: deal.id, confidence };
+      best = { productIdentityId: identity.id, confidence };
   }
   return best && best.confidence >= 35 ? best : null;
+}
+
+function productIdentityLabels(identity: ProductIdentity) {
+  return [
+    `${identity.canonicalName} ${identity.setName} ${identity.productType}`,
+    ...identity.aliases,
+  ];
 }
 
 export function conservativeEconomicsForOffer(offer: NormalisedOffer) {
@@ -161,19 +177,13 @@ export async function runConfiguredScan(
                   !offer.condition?.toLowerCase().includes('empty')
                 ? 'packaging_ambiguity'
                 : null;
-            const fixtureDeal = match
-              ? deals.find((deal) => deal.id === match.dealId)
-              : null;
             matchedRecords.push({
               raw,
               offer,
-              dealId: match?.dealId ?? null,
+              productIdentityId: match?.productIdentityId ?? null,
               matchConfidence: match?.confidence ?? 0,
               rejectedReason,
-              alerted:
-                connector.id === 'fixture-market' &&
-                Boolean(fixtureDeal && qualifiesForQuickFlip(fixtureDeal)) &&
-                !rejectedReason,
+              alerted: false,
             });
           }
         } catch (error) {
@@ -189,7 +199,7 @@ export async function runConfiguredScan(
         fetched: rawById.size,
         normalised,
         matched: matchedRecords.filter(
-          (record) => record.dealId && !record.rejectedReason,
+          (record) => record.productIdentityId && !record.rejectedReason,
         ).length,
         rejected: matchedRecords.filter((record) => record.rejectedReason)
           .length,
@@ -220,8 +230,4 @@ export async function runConfiguredScan(
     totals,
     connectors: connectorSummaries,
   };
-}
-
-export async function runFixtureScan(query = 'pokemon'): Promise<ScanSummary> {
-  return runConfiguredScan([query]);
 }

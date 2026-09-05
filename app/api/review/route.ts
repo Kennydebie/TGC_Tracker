@@ -6,9 +6,5 @@ export async function GET(request: Request) {
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   const data = await listReviewItems(getD1(), user);
-  return Response.json({
-    dataMode: 'demo',
-    data,
-    count: data.length,
-  });
+  return Response.json({ dataMode: 'production', data, count: data.length });
 }

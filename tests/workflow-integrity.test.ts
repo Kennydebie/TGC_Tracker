@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { deals, releases } from '../lib/fixtures.ts';
+import { deals, releases } from './fixtures/app-data.ts';
 import {
   completedSaleProfit,
   DEMO_COMPLETED_SALES,
   DEMO_PORTFOLIO_HOLDINGS,
   summarizeDemoPortfolio,
-} from '../lib/portfolio.ts';
+} from './fixtures/portfolio-data.ts';
 import {
   buildPortfolioCsv,
   calculateLotOffer,

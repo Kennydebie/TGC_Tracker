@@ -5,15 +5,18 @@ import { authenticationRequired, getRequestUser } from '@/lib/server/user';
 export async function GET(request: Request) {
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
+  const data = (await listShadowTrades(getD1(), user)).filter(
+    (trade) => trade.dataMode === 'production',
+  );
   return Response.json({
-    dataMode: 'demo',
-    data: await listShadowTrades(getD1(), user),
+    dataMode: 'production',
+    data,
     metrics: {
-      executabilityRate: 0.82,
-      qualifiedDealPrecision: 0.71,
-      baselinePrecision: 0.46,
-      falsePositiveRate: 0.14,
-      averageValueError: -0.038,
+      executabilityRate: null,
+      qualifiedDealPrecision: null,
+      baselinePrecision: null,
+      falsePositiveRate: null,
+      averageValueError: null,
     },
   });
 }

@@ -11,7 +11,6 @@ import {
   KEEPA_ENABLED_EU_MARKETS,
   extractAmazonAsin,
 } from '../amazon.ts';
-import { amazonFixtureDashboard } from '../fixtures-amazon.ts';
 import type { KeepaUsageSnapshot } from '../connectors/keepa.ts';
 import type { RequestUser } from '../server/user.ts';
 import { calculateEconomics } from '../domain.ts';
@@ -88,7 +87,6 @@ export async function listAmazonDashboard(
     if (value && value.dataMode === 'production' && !unique.has(value.id))
       unique.set(value.id, value);
   }
-  const fixture = amazonFixtureDashboard();
   const productionOpportunities = [...unique.values()];
   const authenticatedSuccess = latest?.status === 'connected';
   const sourceState: AmazonDashboard['sourceState'] = !keyAvailable
@@ -102,25 +100,28 @@ export async function listAmazonDashboard(
           : latest?.status === 'rate_limited'
             ? 'rate_limited'
             : 'error';
-  const displayed = productionOpportunities.length
-    ? productionOpportunities
-    : fixture.opportunities;
   const lastFinishedAt = latest ? Number(latest.finished_at) : null;
   return {
-    ...fixture,
     sourceState,
     apiConnected: authenticatedSuccess,
-    dataMode: productionOpportunities.length ? 'production' : 'fixture',
+    dataMode: 'production',
     keyAvailable,
     reason: !keyAvailable
-      ? fixture.reason
+      ? 'Keepa API key required. No Amazon offers are shown until an authenticated scan succeeds.'
       : authenticatedSuccess
         ? productionOpportunities.length
           ? null
-          : 'Authenticated Keepa scan completed; no monitored products have a usable current offer yet. Recorded fixtures remain isolated below.'
+          : 'Authenticated Keepa scan completed; no monitored products have a usable current offer yet.'
         : latest?.reason
           ? String(latest.reason)
           : 'Keepa key is configured, but no authenticated request has succeeded yet.',
+    markets: DEFAULT_AMAZON_MARKETS,
+    keepaMarkets: KEEPA_ENABLED_EU_MARKETS,
+    unsupportedKeepaMarkets: DEFAULT_AMAZON_MARKETS.filter(
+      (market) => !KEEPA_ENABLED_EU_MARKETS.includes(market),
+    ),
+    watchedIntervalMinutes: AMAZON_WATCHED_INTERVAL_MINUTES,
+    discoveryIntervalMinutes: AMAZON_DISCOVERY_INTERVAL_MINUTES,
     lastScanAt: lastFinishedAt ? new Date(lastFinishedAt).toISOString() : null,
     nextWatchedScanAt: latestWatched
       ? new Date(
@@ -162,7 +163,7 @@ export async function listAmazonDashboard(
         .length,
       errors: Number(latest?.errors ?? 0),
     },
-    opportunities: displayed,
+    opportunities: productionOpportunities,
   };
 }
 
@@ -527,10 +528,13 @@ export async function createAmazonShadowTrade(
   user: RequestUser,
   opportunity: AmazonOpportunity,
 ) {
+  if (opportunity.dataMode !== 'production')
+    throw new Error(
+      'Only production Amazon opportunities can enter Shadow Mode.',
+    );
   await ensureUser(db, user);
   const now = Date.now();
-  const dataMode =
-    opportunity.dataMode === 'production' ? 'production' : 'demo';
+  const dataMode = 'production';
   const productId = `amazon-shadow-product:${opportunity.id}`;
   const listingId = `amazon-shadow-listing:${opportunity.id}`;
   const itemPrice = opportunity.currentPrice ?? 0;
@@ -569,11 +573,11 @@ export async function createAmazonShadowTrade(
       .bind(
         AMAZON_SOURCE_ID,
         'Keepa / Amazon Scout',
-        dataMode === 'production' ? 'official_api' : 'fixture',
-        dataMode === 'production' ? 'Live' : 'Fixture',
+        'official_api',
+        'Live',
         JSON.stringify({
           checkoutAllowed: false,
-          demoOnly: dataMode === 'demo',
+          demoOnly: false,
         }),
         now,
         now,
@@ -634,7 +638,7 @@ export async function createAmazonShadowTrade(
         now,
         now,
         now,
-        dataMode === 'demo' ? 1 : 0,
+        0,
       ),
     db
       .prepare(

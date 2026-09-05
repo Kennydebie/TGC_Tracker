@@ -5,7 +5,6 @@ import {
 } from '@/app/chatgpt-auth';
 import { ScoutApp } from '@/components/scout-app';
 import { getD1 } from '@/db';
-import { deals } from '@/lib/fixtures';
 import { listProductionDeals } from '@/lib/repositories/scans';
 
 export async function ScoutPage({
@@ -19,11 +18,11 @@ export async function ScoutPage({
 }) {
   const initialDealsPromise = (async () => {
     try {
-      const productionDeals = await listProductionDeals(getD1());
-      return [...productionDeals, ...deals];
+      return await listProductionDeals(getD1());
     } catch {
-      // Local builds and unbound previews fall back to explicitly labelled fixtures.
-      return deals;
+      // A missing database binding is an unavailable live feed, not permission
+      // to substitute fictional market records.
+      return [];
     }
   })();
   const [user, initialDeals] = await Promise.all([

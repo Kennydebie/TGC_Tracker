@@ -36,6 +36,8 @@ export const userSettings = sqliteTable('user_settings', {
   laborRateCents: integer('labor_rate_cents').notNull().default(1800),
   requiredRoiBps: integer('required_roi_bps').notNull().default(2000),
   requiredProfitCents: integer('required_profit_cents').notNull().default(2500),
+  // Legacy column retained for migration compatibility. Application writes
+  // always set this to false and the cleanup migration clears old values.
   demoMode: integer('demo_mode', { mode: 'boolean' }).notNull().default(true),
   ...timestamps,
 });

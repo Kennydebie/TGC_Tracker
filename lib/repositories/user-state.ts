@@ -1,7 +1,10 @@
 import type { D1Database } from '@cloudflare/workers-types';
 
-import type { Deal, DealEconomics } from '../domain.ts';
-import { reviewItems } from '../fixtures.ts';
+import {
+  hasSupportedExitEvidence,
+  type Deal,
+  type DealEconomics,
+} from '../domain.ts';
 import type { RequestUser } from '../server/user.ts';
 
 const cents = (value: number) => Math.round(value * 100);
@@ -22,98 +25,24 @@ export async function ensureUser(db: D1Database, user: RequestUser) {
     .run();
 }
 
-export async function ensureDemoListing(
+async function resolveProductionListing(
   db: D1Database,
   user: RequestUser,
   deal: Deal,
 ) {
   await ensureUser(db, user);
-  const now = Date.now();
-  const sourceId = 'fixture-market';
-  const productId = `demo-product:${deal.id}`;
-  const listingId = `demo-listing:${deal.id}`;
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO sources
-          (id, name, access_type, mode, enabled, policy_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-      .bind(
-        sourceId,
-        'Isolated Demo Marketplace',
-        'fixture',
-        'Fixture',
-        1,
-        JSON.stringify({ checkoutAllowed: false, demoOnly: true }),
-        now,
-        now,
-      ),
-    db
-      .prepare(
-        `INSERT INTO products
-          (id, game, set_name, name, slug, product_type, language,
-           manually_verified, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-      .bind(
-        productId,
-        deal.game,
-        deal.set,
-        deal.canonicalProduct,
-        `demo-${deal.id}`,
-        deal.productType,
-        deal.language,
-        1,
-        now,
-        now,
-      ),
-    db
-      .prepare(
-        `INSERT INTO listings
-          (id, source_id, external_id, source_listing_id, source_marketplace,
-           product_id, seller_name, title, url, source_listing_url,
-           item_price_cents, shipping_cents, currency, quantity, condition,
-           language, match_confidence_bps, status, availability_status,
-           detected_at, last_verified_at, first_seen_at, last_seen_at, demo_record)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           item_price_cents = excluded.item_price_cents,
-           shipping_cents = excluded.shipping_cents,
-           availability_status = excluded.availability_status,
-           last_verified_at = excluded.last_verified_at,
-           last_seen_at = excluded.last_seen_at`,
-      )
-      .bind(
-        listingId,
-        sourceId,
-        deal.sourceListingId,
-        deal.sourceListingId,
-        deal.sourceMarketplace,
-        productId,
-        deal.seller,
-        deal.title,
-        deal.sourceListingUrl,
-        deal.sourceListingUrl,
-        cents(deal.economics.itemPrice),
-        cents(deal.economics.inboundShipping),
-        'EUR',
-        deal.quantity,
-        deal.condition,
-        deal.language,
-        deal.matchConfidence * 100,
-        'active',
-        deal.availabilityStatus,
-        Date.parse(deal.detectedAt),
-        Date.parse(deal.lastVerifiedAt),
-        Date.parse(deal.detectedAt),
-        now,
-        1,
-      ),
-  ]);
-  return { listingId, productId };
+  if (deal.dataMode !== 'production')
+    throw new Error('Only verified production listings can be saved');
+  const listing = await db
+    .prepare(
+      `SELECT id, product_id
+       FROM listings
+       WHERE id = ? AND demo_record = 0`,
+    )
+    .bind(deal.id)
+    .first<{ id: string; product_id: string }>();
+  if (!listing) throw new Error('Live listing was not found');
+  return { listingId: listing.id, productId: listing.product_id };
 }
 
 async function ensureDefaultWatchlist(
@@ -142,13 +71,13 @@ export async function listTrackedDealIds(db: D1Database, user: RequestUser) {
       `SELECT listings.id AS listing_id
        FROM watchlist_items
        INNER JOIN listings ON listings.id = watchlist_items.listing_id
-       WHERE watchlist_items.user_id = ? AND watchlist_items.data_mode = 'demo'`,
+       WHERE watchlist_items.user_id = ?
+         AND watchlist_items.data_mode = 'production'
+         AND listings.demo_record = 0`,
     )
     .bind(user.id)
     .all<{ listing_id: string }>();
-  return result.results
-    .map((row) => row.listing_id.replace(/^demo-listing:/, ''))
-    .filter(Boolean);
+  return result.results.map((row) => row.listing_id).filter(Boolean);
 }
 
 export async function setTrackedDeal(
@@ -157,13 +86,17 @@ export async function setTrackedDeal(
   deal: Deal,
   tracked: boolean,
 ) {
-  const { listingId, productId } = await ensureDemoListing(db, user, deal);
-  const watchlistId = await ensureDefaultWatchlist(db, user, 'demo');
+  const { listingId, productId } = await resolveProductionListing(
+    db,
+    user,
+    deal,
+  );
+  const watchlistId = await ensureDefaultWatchlist(db, user, 'production');
   if (!tracked) {
     await db
       .prepare(
         `DELETE FROM watchlist_items
-         WHERE user_id = ? AND listing_id = ? AND data_mode = 'demo'`,
+         WHERE user_id = ? AND listing_id = ? AND data_mode = 'production'`,
       )
       .bind(user.id, listingId)
       .run();
@@ -187,9 +120,11 @@ export async function setTrackedDeal(
       watchlistId,
       productId,
       listingId,
-      cents(deal.economics.maximumAllInCost),
+      hasSupportedExitEvidence(deal.economics)
+        ? cents(deal.economics.maximumAllInCost)
+        : null,
       0,
-      'demo',
+      'production',
       now,
       now,
     )
@@ -274,7 +209,7 @@ export async function saveUserSettings(
       cents(input.laborRate),
       Math.round(input.requiredRoi * 10_000),
       cents(input.requiredProfit),
-      1,
+      0,
       now,
       now,
     )
@@ -300,7 +235,7 @@ export async function getAlertRule(db: D1Database, user: RequestUser) {
               minimum_profit_per_hour_cents, minimum_grade,
               maximum_holding_days, maximum_risk_score
        FROM alert_rules
-       WHERE user_id = ? AND data_mode = 'demo' AND enabled = 1
+       WHERE user_id = ? AND data_mode = 'production' AND enabled = 1
        ORDER BY updated_at DESC LIMIT 1`,
     )
     .bind(user.id)
@@ -333,7 +268,7 @@ export async function saveAlertRule(
 ) {
   await ensureUser(db, user);
   const now = Date.now();
-  const id = `alert-rule:${user.id}:demo`;
+  const id = `alert-rule:${user.id}:production`;
   await db
     .prepare(
       `INSERT INTO alert_rules
@@ -365,7 +300,7 @@ export async function saveAlertRule(
       input.minimumGrade,
       input.maximumHoldingDays,
       input.maximumRiskScore,
-      'demo',
+      'production',
       now,
       now,
     )
@@ -378,7 +313,14 @@ export async function createShadowTrade(
   user: RequestUser,
   deal: Deal,
 ) {
-  const { listingId } = await ensureDemoListing(db, user, deal);
+  if (
+    !Number.isFinite(deal.economics.expectedSalePrice) ||
+    deal.economics.expectedSalePrice <= 0
+  )
+    throw new Error(
+      'Shadow Mode requires supported exit evidence; this listing has an active ask only',
+    );
+  const { listingId } = await resolveProductionListing(db, user, deal);
   const now = Date.now();
   const id = crypto.randomUUID();
   await db
@@ -401,7 +343,7 @@ export async function createShadowTrade(
       deal.economics.modelVersion,
       null,
       'open',
-      'demo',
+      'production',
       now + 7 * 86_400_000,
       now,
     )
@@ -415,7 +357,7 @@ export async function createShadowTrade(
     laterSupportedNetExit: null,
     status: 'Open',
     followUp: '7-day due',
-    dataMode: 'demo' as const,
+    dataMode: 'production' as const,
   };
 }
 
@@ -433,15 +375,15 @@ export async function listShadowTrades(db: D1Database, user: RequestUser) {
        INNER JOIN listings ON listings.id = shadow_trades.listing_id
        INNER JOIN products ON products.id = listings.product_id
        WHERE shadow_trades.user_id = ?
+         AND shadow_trades.data_mode = 'production'
+         AND listings.demo_record = 0
        ORDER BY shadow_trades.created_at DESC`,
     )
     .bind(user.id)
     .all<Record<string, string | number | null>>();
   return result.results.map((row) => ({
     id: String(row.id),
-    dealId: String(row.listing_id)
-      .replace(/^demo-listing:/, '')
-      .replace(/^amazon-shadow-listing:/, ''),
+    dealId: String(row.listing_id),
     name: String(row.name),
     detected: new Date(Number(row.created_at)).toISOString(),
     economics: JSON.parse(String(row.economics_json)) as DealEconomics,
@@ -452,46 +394,16 @@ export async function listShadowTrades(db: D1Database, user: RequestUser) {
           (JSON.parse(String(row.economics_json)) as DealEconomics).allInCost,
     status: String(row.status),
     followUp: new Date(Number(row.next_follow_up_at)).toISOString(),
-    dataMode: String(row.data_mode) as 'demo' | 'production',
+    dataMode: 'production' as const,
   }));
 }
 
-export async function seedDemoReviewItems(db: D1Database, user: RequestUser) {
-  await ensureUser(db, user);
-  const now = Date.now();
-  const statements = reviewItems.map((item, index) =>
-    db
-      .prepare(
-        `INSERT INTO review_queue
-          (id, user_id, source_id, listing_id, kind, severity, payload_json,
-           status, data_mode, resolved_by, resolved_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO NOTHING`,
-      )
-      .bind(
-        `demo-review:${user.id}:${item.id}`,
-        user.id,
-        null,
-        null,
-        item.type,
-        item.severity,
-        JSON.stringify({ ...item, id: `demo-review:${user.id}:${item.id}` }),
-        'open',
-        'demo',
-        null,
-        null,
-        now - index * 60_000,
-      ),
-  );
-  if (statements.length) await db.batch(statements);
-}
-
 export async function listReviewItems(db: D1Database, user: RequestUser) {
-  await seedDemoReviewItems(db, user);
+  await ensureUser(db, user);
   const result = await db
     .prepare(
       `SELECT id, payload_json FROM review_queue
-       WHERE user_id = ? AND status = 'open'
+       WHERE user_id = ? AND status = 'open' AND data_mode = 'production'
        ORDER BY created_at ASC`,
     )
     .bind(user.id)
@@ -525,7 +437,8 @@ export async function resolveReviewItem(
   const existing = await db
     .prepare(
       `SELECT payload_json FROM review_queue
-       WHERE id = ? AND user_id = ? AND status = 'open'`,
+       WHERE id = ? AND user_id = ? AND status = 'open'
+         AND data_mode = 'production'`,
     )
     .bind(id, user.id)
     .first<{ payload_json: string }>();
@@ -603,7 +516,7 @@ export async function createPurchase(
   user: RequestUser,
   input: PurchaseInput,
 ) {
-  const { listingId, productId } = await ensureDemoListing(
+  const { listingId, productId } = await resolveProductionListing(
     db,
     user,
     input.deal,
@@ -634,7 +547,7 @@ export async function createPurchase(
         1,
         input.strategy,
         null,
-        'demo',
+        'production',
         now,
         now,
       ),
@@ -658,7 +571,7 @@ export async function createPurchase(
         cents(input.acquisitionCosts),
         cents(allInCost),
         'EUR',
-        'demo',
+        'production',
         now,
         now,
       ),
@@ -682,7 +595,8 @@ export async function listInventoryLots(db: D1Database, user: RequestUser) {
               products.name
        FROM inventory_lots
        INNER JOIN products ON products.id = inventory_lots.product_id
-       WHERE inventory_lots.user_id = ? AND inventory_lots.data_mode = 'demo'
+       WHERE inventory_lots.user_id = ?
+         AND inventory_lots.data_mode = 'production'
        ORDER BY inventory_lots.acquired_at DESC`,
     )
     .bind(user.id)
@@ -695,7 +609,7 @@ export async function listInventoryLots(db: D1Database, user: RequestUser) {
     acquiredAt: new Date(Number(row.acquired_at)).toISOString(),
     allInBasis: fromCents(Number(row.all_in_basis_cents)),
     strategy: String(row.strategy),
-    dataMode: 'demo' as const,
+    dataMode: 'production' as const,
   }));
 }
 
@@ -715,7 +629,7 @@ export async function createSale(
     .prepare(
       `SELECT remaining_quantity, quantity, all_in_basis_cents
        FROM inventory_lots
-       WHERE id = ? AND user_id = ? AND data_mode = 'demo'`,
+       WHERE id = ? AND user_id = ? AND data_mode = 'production'`,
     )
     .bind(input.inventoryLotId, user.id)
     .first<{
@@ -760,7 +674,7 @@ export async function createSale(
         cents(netProceeds),
         cents(realisedProfit),
         'EUR',
-        'demo',
+        'production',
         now,
         now,
       ),

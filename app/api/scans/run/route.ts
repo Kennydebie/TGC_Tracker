@@ -12,21 +12,26 @@ export async function POST(request: Request) {
   const blocked = rejectCrossSiteMutation(request);
   if (blocked) return blocked;
   let queries = configuredWatchQueries();
-  let source: 'all' | 'ebay' | 'fixture-market' = 'all';
   try {
     const body = (await request.json()) as {
       query?: string;
       queries?: string[];
-      source?: 'all' | 'ebay' | 'fixture-market';
+      source?: string;
     };
     if (body.query) queries = [body.query.slice(0, 120)];
     if (body.queries?.length)
       queries = body.queries.map((query) => query.slice(0, 120)).slice(0, 20);
-    if (body.source) source = body.source;
+    if (body.source) {
+      if (body.source !== 'all' && body.source !== 'ebay')
+        return Response.json(
+          { error: 'Only production eBay scans are supported.' },
+          { status: 400 },
+        );
+    }
   } catch {
     /* configured watch queries */
   }
-  if (source === 'ebay' && !hasEbayCredentials())
+  if (!hasEbayCredentials())
     return Response.json(
       {
         error: 'Credentials Required',
@@ -35,13 +40,10 @@ export async function POST(request: Request) {
       },
       { status: 424 },
     );
-  const selectedConnector = source === 'all' ? null : getConnector(source);
-  if (source !== 'all' && !selectedConnector)
+  const selectedConnector = getConnector('ebay');
+  if (!selectedConnector)
     return Response.json({ error: 'Source is unavailable' }, { status: 424 });
-  const summary = await runConfiguredScan(
-    queries,
-    selectedConnector ? [selectedConnector] : undefined,
-  );
+  const summary = await runConfiguredScan(queries, [selectedConnector]);
   await persistScanSummary(getD1(), summary, {
     ebaySuppressionHmacSecret:
       env.EBAY_MARKETPLACE_DELETION_HMAC_SECRET?.trim(),

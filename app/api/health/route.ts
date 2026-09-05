@@ -3,7 +3,7 @@ export function GET() {
     status: 'ok',
     service: 'tcg-scout-web',
     version: '0.1.0',
-    mode: 'demo',
+    mode: 'production',
     timestamp: new Date().toISOString(),
   });
 }

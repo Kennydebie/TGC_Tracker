@@ -3,6 +3,7 @@ import {
   clusterCommunitySignals,
   canCommunityCreateBuyRecommendation,
   communityMomentumScore,
+  emptyCommunityDashboard,
   hypeRiskLabel,
   hypeRiskScore,
   mentionAcceleration,
@@ -12,12 +13,6 @@ import {
   type CommunitySourceStatus,
   type NormalisedCommunitySignal,
 } from '../community.ts';
-import {
-  communityFixtureDashboard,
-  communityFixtureSignals,
-} from '../fixtures-community.ts';
-import { amazonFixtureDashboard } from '../fixtures-amazon.ts';
-import { createAmazonShadowTrade } from './amazon.ts';
 import { ensureUser } from './user-state.ts';
 import type { RequestUser } from '../server/user.ts';
 
@@ -254,10 +249,8 @@ export async function listCommunityDashboard(
     ]);
 
   if (!momentum.results.length && !signals.results.length) {
-    const fixture = communityFixtureDashboard();
     const configuredSources = sourceRows.results.map(mapCommunitySourceRow);
-    return {
-      ...fixture,
+    return emptyCommunityDashboard({
       reddit: {
         connected: false,
         status: connection.redditCredentialsAvailable
@@ -276,8 +269,8 @@ export async function listCommunityDashboard(
           ? 'Bot configured; awaiting a permitted Gateway event and message-content check.'
           : 'Discord bot and explicit guild/channel allowlists are required.',
       },
-      sources: [...configuredSources, ...fixture.sources],
-    };
+      sources: configuredSources,
+    });
   }
 
   const latestByProduct = new Map<string, Record<string, unknown>>();
@@ -1399,172 +1392,6 @@ export async function ignoreCommunityEvent(
       .bind(crypto.randomUUID(), user.id, eventId, now),
   ]);
   return { ignored: true };
-}
-
-export async function createCommunityShadowTrade(
-  db: D1Database,
-  user: RequestUser,
-  eventId: string,
-) {
-  const fixtureDashboard = communityFixtureDashboard();
-  const communityProduct = fixtureDashboard.products.find(
-    (product) => product.id === eventId,
-  );
-  if (!communityProduct || communityProduct.verificationStatus !== 'confirmed')
-    throw new Error(
-      'Only a market-confirmed community fixture can enter Shadow Mode.',
-    );
-  const amazonOpportunity = amazonFixtureDashboard().opportunities.find(
-    (opportunity) =>
-      opportunity.canonicalProductId === communityProduct.canonicalProductId,
-  );
-  if (!amazonOpportunity)
-    throw new Error(
-      'No matching market evidence is available for Shadow Mode.',
-    );
-  const itemPrice = communityProduct.marketEvidence.itemPrice;
-  const deliveredPrice = communityProduct.marketEvidence.deliveredPrice;
-  const conservativeExit = communityProduct.marketEvidence.conservativeExit;
-  const shadowOpportunity = {
-    ...amazonOpportunity,
-    id: `community-shadow:${eventId}`,
-    product: communityProduct.product,
-    game: communityProduct.game,
-    asin: 'B0RFTSPRT1',
-    marketplace: 'DE' as const,
-    sourceListingUrl:
-      communityProduct.marketEvidence.sourceUrl ??
-      amazonOpportunity.sourceListingUrl,
-    sellerType: 'AMAZON_DIRECT' as const,
-    sellerName: 'Amazon fixture verification',
-    currentPrice: itemPrice,
-    buyBoxPrice: itemPrice,
-    amazonPrice: itemPrice,
-    lowestNew: itemPrice,
-    shipping:
-      itemPrice !== null && deliveredPrice !== null
-        ? Math.max(0, deliveredPrice - itemPrice)
-        : null,
-    shippingStatus: 'ESTIMATED' as const,
-    mandatoryFees:
-      itemPrice !== null &&
-      deliveredPrice !== null &&
-      conservativeExit !== null &&
-      communityProduct.marketEvidence.estimatedNetProfit !== null
-        ? Math.max(
-            0,
-            conservativeExit -
-              deliveredPrice -
-              communityProduct.marketEvidence.estimatedNetProfit,
-          )
-        : 0,
-    deliveredPrice,
-    economics: {
-      ...amazonOpportunity.economics,
-      conservativeExit,
-      conservativeProfit: communityProduct.marketEvidence.estimatedNetProfit,
-      roi: communityProduct.marketEvidence.roi,
-    },
-    riskFlags: [],
-    reviewRequired: false,
-    qualified: true,
-    dataMode: 'fixture' as const,
-  };
-  const trade = await createAmazonShadowTrade(db, user, shadowOpportunity);
-  const now = Date.now();
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO products
-          (id, game, set_name, name, slug, product_type, language,
-           manually_verified, created_at, updated_at)
-         VALUES (?, ?, 'Community Radar', ?, ?, 'community product', 'Unknown',
-                 0, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-      .bind(
-        communityProduct.canonicalProductId,
-        communityProduct.game,
-        communityProduct.product,
-        `community-${stableId(communityProduct.canonicalProductId)}`,
-        now,
-        now,
-      ),
-    db
-      .prepare(
-        `INSERT INTO community_signal_events
-          (id, dedupe_key, canonical_product_id, signal_type, first_detected_at,
-           last_detected_at, mention_count, unique_author_count,
-           unique_community_count, platforms_json, source_ids_json,
-           verification_status, data_mode, created_at, updated_at)
-         VALUES (?, ?, ?, 'DEAL_REPORT', ?, ?, ?, ?, ?, '["discord","reddit"]',
-                 '[]', 'confirmed', 'fixture', ?, ?)
-         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-      .bind(
-        eventId,
-        `fixture:${eventId}`,
-        communityProduct.canonicalProductId,
-        Date.parse(communityProduct.firstDetectedAt),
-        Date.parse(
-          communityProduct.marketDetectedAt ?? communityProduct.firstDetectedAt,
-        ),
-        communityProduct.mentionCounts.h24,
-        communityProduct.uniqueAuthors,
-        communityProduct.uniqueCommunities,
-        now,
-        now,
-      ),
-    db
-      .prepare(
-        `INSERT INTO community_shadow_evaluations
-          (id, shadow_trade_id, community_event_id, community_detected_at,
-           market_verified_at, price_at_community_detection_cents,
-           price_at_verification_cents, community_momentum, divergence_score,
-           hype_risk_score, source_reliability, economics_json, data_mode,
-           created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fixture', ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        trade.id,
-        eventId,
-        Date.parse(communityProduct.firstDetectedAt),
-        communityProduct.marketDetectedAt
-          ? Date.parse(communityProduct.marketDetectedAt)
-          : null,
-        communityProduct.marketEvidence.itemPrice === null
-          ? null
-          : Math.round(communityProduct.marketEvidence.itemPrice * 100),
-        communityProduct.marketEvidence.deliveredPrice === null
-          ? null
-          : Math.round(communityProduct.marketEvidence.deliveredPrice * 100),
-        communityProduct.momentumScore,
-        communityProduct.divergenceScore,
-        communityProduct.hypeRisk,
-        communityProduct.sourceReliability,
-        JSON.stringify({
-          ...communityProduct.marketEvidence,
-          leadTimeMinutes: communityProduct.leadTimeMinutes,
-          communityOnlyBuyBlocked: true,
-        }),
-        now,
-      ),
-  ]);
-  return {
-    ...trade,
-    communityLeadTimeMinutes: communityProduct.leadTimeMinutes,
-  };
-}
-
-export function getFixtureCommunityProduct(eventId: string) {
-  return communityFixtureDashboard().products.find(
-    (product) => product.id === eventId,
-  );
-}
-
-export function getFixtureCommunitySignal(signalId: string) {
-  return communityFixtureSignals().find((signal) => signal.id === signalId);
 }
 
 export const communityRepositoryInternals = { COMMUNITY_ALERT_TYPES };

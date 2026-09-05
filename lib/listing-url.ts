@@ -1,5 +1,4 @@
 const EXACT_HOSTS: Record<string, Set<string>> = {
-  'fixture-market': new Set(['demo.invalid']),
   ebay: new Set([
     'www.ebay.com',
     'www.ebay.nl',

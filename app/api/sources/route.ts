@@ -1,16 +1,13 @@
 import { connectorRegistry } from '@/lib/connectors/registry';
-import { sources } from '@/lib/fixtures';
 
 export function GET() {
-  const connectors = connectorRegistry.map(
-    ({ connector: _connector, ...state }) => state,
-  );
+  const connectors = connectorRegistry
+    .filter((item) => item.id !== 'fixture-market' && item.status !== 'fixture')
+    .map(({ connector: _connector, ...state }) => state);
   return Response.json({
-    mode: 'demo',
-    data: sources,
+    mode: 'production',
+    data: connectors,
     connectors,
-    liveConnectors: connectors.filter(
-      (connector) => connector.enabled && connector.status !== 'fixture',
-    ).length,
+    liveConnectors: connectors.filter((connector) => connector.enabled).length,
   });
 }

@@ -8,7 +8,9 @@ export async function POST(
   const blocked = rejectCrossSiteMutation(request);
   if (blocked) return blocked;
   const { id } = await params;
-  const state = connectorRegistry.find((item) => item.id === id);
+  const state = connectorRegistry.find(
+    (item) => item.id === id && item.id !== 'fixture-market',
+  );
   if (!state)
     return Response.json({ error: 'Source not found' }, { status: 404 });
   if (!state.connector)

@@ -1,6 +1,5 @@
 import { getD1 } from '@/db';
 import {
-  getFixtureCommunityProduct,
   listCommunityDashboard,
   saveCommunityWatchRule,
 } from '@/lib/repositories/community';
@@ -23,14 +22,14 @@ export async function POST(request: Request) {
   const eventId = body.eventId?.trim().slice(0, 200);
   if (!eventId)
     return Response.json({ error: 'Event ID is required.' }, { status: 400 });
-  const product =
-    getFixtureCommunityProduct(eventId) ??
-    (
-      await listCommunityDashboard(getD1(), {
-        redditCredentialsAvailable: false,
-        discordCredentialsAvailable: false,
-      })
-    ).products.find((item) => item.id === eventId);
+  const product = (
+    await listCommunityDashboard(getD1(), {
+      redditCredentialsAvailable: false,
+      discordCredentialsAvailable: false,
+    })
+  ).products.find(
+    (item) => item.id === eventId && item.dataMode === 'production',
+  );
   if (!product)
     return Response.json(
       { error: 'Community event was not found.' },

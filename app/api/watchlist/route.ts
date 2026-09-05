@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const user = getRequestUser(request);
   if (!user) return authenticationRequired();
   return Response.json({
-    dataMode: 'demo',
+    dataMode: 'production',
     dealIds: await listTrackedDealIds(getD1(), user),
   });
 }

@@ -1,6 +1,5 @@
 import { getD1 } from '@/db';
-import { deals } from '@/lib/fixtures';
-import { qualifiesForQuickFlip } from '@/lib/domain';
+import { qualifiesForQuickFlip, serializeDealForPublicApi } from '@/lib/domain';
 import { listProductionDeals } from '@/lib/repositories/scans';
 
 export async function GET(
@@ -8,12 +7,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const deal =
-    deals.find((item) => item.id === id) ??
-    (await listProductionDeals(getD1())).find((item) => item.id === id);
+  const deal = (await listProductionDeals(getD1())).find(
+    (item) => item.id === id && item.dataMode === 'production',
+  );
   if (!deal) return Response.json({ error: 'Deal not found' }, { status: 404 });
   return Response.json({
     dataMode: deal.dataMode,
-    data: { ...deal, passesQuickFlipGate: qualifiesForQuickFlip(deal) },
+    data: {
+      ...serializeDealForPublicApi(deal),
+      passesQuickFlipGate: qualifiesForQuickFlip(deal),
+    },
   });
 }

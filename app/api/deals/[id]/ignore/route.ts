@@ -1,4 +1,3 @@
-import { deals } from '@/lib/fixtures';
 import { rejectCrossSiteMutation } from '@/lib/security';
 
 export async function POST(
@@ -8,12 +7,13 @@ export async function POST(
   const blocked = rejectCrossSiteMutation(request);
   if (blocked) return blocked;
   const { id } = await params;
-  if (!deals.some((item) => item.id === id))
-    return Response.json({ error: 'Deal not found' }, { status: 404 });
-  return Response.json({
-    mode: 'demo',
-    dealId: id,
-    ignored: true,
-    auditId: crypto.randomUUID(),
-  });
+  return Response.json(
+    {
+      status: 'unavailable',
+      dataMode: 'production',
+      dealId: id,
+      error: 'Ignoring production deals is not implemented yet.',
+    },
+    { status: 409 },
+  );
 }

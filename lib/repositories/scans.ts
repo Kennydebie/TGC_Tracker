@@ -1,4 +1,3 @@
-import { deals } from '../fixtures.ts';
 import { confidenceGrade, type Deal, type DealEconomics } from '../domain.ts';
 import {
   ebayIdentityDataFromListing,
@@ -9,6 +8,10 @@ import {
   type MatchedOffer,
   type ScanSummary,
 } from '../services/scanning.ts';
+import {
+  getProductIdentity,
+  type ProductIdentity,
+} from '../product-identities.ts';
 
 const cents = (value: number) => Math.round(value * 100);
 
@@ -21,24 +24,15 @@ async function sha256(value: string) {
 }
 
 function scoreEconomics(record: MatchedOffer): {
-  deal: Deal;
+  identity: ProductIdentity;
   economics: DealEconomics;
-  dataMode: 'demo' | 'production';
 } | null {
-  if (!record.dealId || record.rejectedReason) return null;
-  const deal = deals.find((item) => item.id === record.dealId);
-  if (!deal) return null;
-  const dataMode =
-    record.offer.sourceMarketplace === 'fixture-market'
-      ? ('demo' as const)
-      : ('production' as const);
+  if (!record.productIdentityId || record.rejectedReason) return null;
+  const identity = getProductIdentity(record.productIdentityId);
+  if (!identity) return null;
   return {
-    deal,
-    economics:
-      dataMode === 'demo'
-        ? deal.economics
-        : conservativeEconomicsForOffer(record.offer),
-    dataMode,
+    identity,
+    economics: conservativeEconomicsForOffer(record.offer),
   };
 }
 
@@ -48,8 +42,16 @@ export async function persistScanSummary(
   options: { ebaySuppressionHmacSecret?: string } = {},
 ) {
   for (const connector of summary.connectors) {
+    if (
+      connector.source === 'fixture-market' ||
+      connector.records.some(
+        (record) => record.offer.sourceMarketplace === 'fixture-market',
+      )
+    )
+      throw new Error(
+        'Fixture connector output is test-only and cannot be persisted.',
+      );
     const now = Date.parse(summary.finishedAt);
-    const demoRecord = connector.source === 'fixture-market' ? 1 : 0;
     await db.batch([
       db
         .prepare(
@@ -62,9 +64,9 @@ export async function persistScanSummary(
         )
         .bind(
           connector.source,
-          connector.source === 'ebay' ? 'eBay Browse' : 'Demo Marketplace',
-          connector.source === 'ebay' ? 'official_api' : 'fixture',
-          demoRecord ? 'Fixture' : 'Live',
+          connector.source === 'ebay' ? 'eBay Browse' : connector.source,
+          connector.source === 'ebay' ? 'official_api' : 'allowlisted_feed',
+          'Live',
           1,
           JSON.stringify({ checkoutAllowed: false }),
           now,
@@ -136,15 +138,15 @@ export async function persistScanSummary(
           rawJson,
           payloadHash,
           Date.parse(record.raw.capturedAt),
-          demoRecord,
+          0,
           ...suppressionGuard.bindings,
         )
         .run();
 
       const scored = scoreEconomics(record);
       if (!scored) continue;
-      const { deal, economics, dataMode } = scored;
-      const productId = `canonical:${deal.id}`;
+      const { identity, economics } = scored;
+      const productId = `canonical:${identity.id}`;
       const listingId = `listing:${connector.source}:${record.offer.sourceListingId}`;
       const valuationId = `valuation:${listingId}:${payloadHash}`;
       const dealScoreId = `score:${listingId}:${payloadHash}`;
@@ -155,12 +157,9 @@ export async function persistScanSummary(
           availabilityStatus: record.offer.availabilityStatus,
         }),
       );
-      const grade =
-        dataMode === 'demo'
-          ? deal.confidenceGrade
-          : confidenceGrade(record.matchConfidence, 1);
-      const riskScore = dataMode === 'demo' ? deal.riskScore : 85;
-      const instantScore = dataMode === 'demo' ? deal.instantScore : 12;
+      const grade = confidenceGrade(record.matchConfidence, 1);
+      const riskScore = 85;
+      const instantScore = 12;
       await db.batch([
         db
           .prepare(
@@ -172,12 +171,12 @@ export async function persistScanSummary(
           )
           .bind(
             productId,
-            deal.game,
-            deal.set,
-            deal.canonicalProduct,
-            `canonical-${deal.id}`,
-            deal.productType,
-            deal.language,
+            identity.game,
+            identity.setName,
+            identity.canonicalName,
+            `canonical-${identity.id}`,
+            identity.productType,
+            identity.language,
             0,
             now,
             now,
@@ -222,7 +221,9 @@ export async function persistScanSummary(
             record.offer.sourceListingUrl,
             record.offer.sourceListingUrl,
             cents(record.offer.itemPrice),
-            cents(record.offer.shipping ?? 0),
+            record.offer.shipping === null
+              ? null
+              : cents(record.offer.shipping),
             record.offer.currency,
             record.offer.quantity,
             record.offer.condition,
@@ -234,7 +235,7 @@ export async function persistScanSummary(
             Date.parse(record.offer.lastVerifiedAt),
             Date.parse(record.offer.detectedAt),
             Date.parse(record.offer.lastVerifiedAt),
-            demoRecord,
+            0,
             sourceRecordId,
             ...suppressionGuard.bindings,
           ),
@@ -253,7 +254,9 @@ export async function persistScanSummary(
             `snapshot:${listingId}:${snapshotHash}`,
             listingId,
             cents(record.offer.itemPrice),
-            cents(record.offer.shipping ?? 0),
+            record.offer.shipping === null
+              ? null
+              : cents(record.offer.shipping),
             record.offer.currency,
             record.offer.availabilityStatus,
             snapshotHash,
@@ -276,21 +279,18 @@ export async function persistScanSummary(
             valuationId,
             productId,
             cents(economics.conservativeNetExit),
-            dataMode === 'demo' ? cents(economics.expectedSalePrice) : null,
+            null,
             null,
             grade,
-            dataMode === 'demo' ? Math.max(1, deal.soldCount30d ?? 1) : 0,
+            0,
             JSON.stringify({
-              dataMode,
+              dataMode: 'production',
               activeAskIsNotSaleEvidence: true,
-              note:
-                dataMode === 'demo'
-                  ? 'Fictional demonstration transaction evidence.'
-                  : 'No completed-sale evidence stored; exit value held at zero.',
+              note: 'No completed-sale evidence stored; exit value held at zero.',
             }),
             economics.modelVersion,
             now,
-            demoRecord,
+            0,
             listingId,
             ...suppressionGuard.bindings,
           ),
@@ -314,7 +314,7 @@ export async function persistScanSummary(
             listingId,
             valuationId,
             instantScore,
-            dataMode === 'demo' ? deal.holdScore : 0,
+            0,
             riskScore,
             grade,
             cents(economics.allInCost),
@@ -324,18 +324,16 @@ export async function persistScanSummary(
             cents(economics.profitPerHour),
             cents(economics.maximumItemPrice),
             cents(economics.maximumAllInCost),
-            dataMode === 'demo' ? deal.exitChannel : 'No supported exit',
+            'No supported exit',
             JSON.stringify({
               economics,
               priceEvidence:
-                dataMode === 'demo'
-                  ? deal.priceEvidence
-                  : 'Observed active listing only; no completed-sale evidence stored.',
-              sourceDealId: deal.id,
+                'Observed active listing only; no completed-sale evidence stored.',
+              sourceIdentityId: identity.id,
             }),
             economics.modelVersion,
             now,
-            demoRecord,
+            0,
             listingId,
             valuationId,
             ...suppressionGuard.bindings,

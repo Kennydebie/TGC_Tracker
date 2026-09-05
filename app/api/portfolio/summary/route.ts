@@ -1,9 +1,9 @@
-import { portfolio } from '@/lib/fixtures';
-
 export function GET() {
   return Response.json({
-    mode: 'demo',
-    data: portfolio,
+    mode: 'production',
+    status: 'unavailable',
+    data: null,
+    message: 'No production portfolio summary is available yet.',
     semantics: {
       realisedProfit: 'Completed sales only',
       displayedMarketValue: 'Observed/modelled estimate, not realised',
