@@ -57,6 +57,13 @@
       "when": 1788631845516,
       "tag": "0007_remove_non_production_records",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788633900000,
+      "tag": "0008_correct_legacy_product_identity",
+      "breakpoints": true
     }
   ]
 }

@@ -55,4 +55,10 @@ void test('fictional datasets live only under test fixtures', async () => {
     ),
     /DELETE FROM listings[\s\S]*demo_record/,
   );
+  const identityCleanup = await readFile(
+    path.resolve('drizzle/0008_correct_legacy_product_identity.sql'),
+    'utf8',
+  );
+  assert.match(identityCleanup, /Prismatic Evolutions Elite Trainer Box['"],/);
+  assert.doesNotMatch(identityCleanup, /Elite Trainer Box\s*[×x]\s*2/i);
 });
