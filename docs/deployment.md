@@ -13,6 +13,22 @@ Before publishing:
 5. verify `/api/health` and `/api/readiness`;
 6. verify missing-credential states before enabling a connector.
 
+## Discord Gateway Worker
+
+The always-on Discord listener is a separate Cloudflare Worker package under
+`workers/discord-gateway`. In Cloudflare Builds, use that directory as the
+project root, run `npm ci` as the build command, and use `npm run deploy` as
+the deploy command. This ensures the committed listener `wrangler.jsonc` and
+its pinned lockfile are used instead of the repository-root Vite application.
+
+From the repository root, the equivalent commands are:
+
+```sh
+npm run community:discord:cloudflare:install
+npm run community:discord:cloudflare:check
+npm run community:discord:cloudflare:deploy
+```
+
 ## Troubleshooting
 
 - Node engine warning: use Node 22.13+.

@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/workers/discord-gateway/node_modules/
 /.pnp
 /.pnpm-store/
 .pnp.*
@@ -39,6 +40,7 @@ tsconfig.tsbuildinfo
 /dist-extension/
 /dist-discord-worker/
 /.wrangler/
+/workers/discord-gateway/.wrangler/
 /test-results/
 /playwright-report/
 /outputs/

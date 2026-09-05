@@ -27,13 +27,22 @@ Use independently generated random values of at least 32 bytes for the ingestion
 6. Deploy one listener. The production path is the singleton Durable Object in
    `workers/discord-gateway`. It uses a one-minute watchdog trigger, persists
    Discord resume state and keeps a bounded 24-hour delivery queue in Durable
-   Object storage. Configure its three worker settings, then deploy it through
-   the Cloudflare account that owns the listener Worker:
+   Object storage. The listener has its own pinned dependency lock so its
+   Wrangler runtime cannot conflict with the website's Vite/Sites runtime.
+   Install that package, configure its three worker settings, then deploy it
+   through the Cloudflare account that owns the listener Worker:
 
 ```sh
+npm run community:discord:cloudflare:install
 npm run community:discord:cloudflare:check
 npm run community:discord:cloudflare:deploy
 ```
+
+For Cloudflare Builds, set the root directory to
+`workers/discord-gateway`, the build command to `npm ci`, and the deploy
+command to `npm run deploy`. Do not use bare `npx wrangler deploy` from the
+repository root: that directory is the separate Vite/Sites application and
+Wrangler can auto-detect the wrong deployment target.
 
 Set `DISCORD_BOT_TOKEN` and `COMMUNITY_INGEST_SECRET` as encrypted Cloudflare
 Worker secrets. Set `DISCORD_INGEST_URL` to the app endpoint listed above. The
