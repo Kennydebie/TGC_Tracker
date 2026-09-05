@@ -39,6 +39,7 @@ import type {
   CommunityDashboard,
   CommunityProductRadar,
   CommunitySignalType,
+  ScoutResearchFinding,
 } from '@/lib/community';
 import { cn } from '@/lib/utils';
 
@@ -72,6 +73,30 @@ function timeLabel(value: string) {
         minute: '2-digit',
         timeZone: 'Europe/Amsterdam',
       });
+}
+
+function dateTimeLabel(value: string | null) {
+  if (!value) return 'Not yet';
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? 'Unknown time'
+    : date.toLocaleString('nl-NL', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: 'Europe/Amsterdam',
+      });
+}
+
+function safeResearchUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 type WatchThresholds = {
@@ -353,6 +378,10 @@ export function CommunityRadar({
             status={dashboard.discord.status}
             detail={dashboard.discord.detail}
           />
+          <ResearchImportHealth
+            status={dashboard.researchImport}
+            signedIn={userSignedIn}
+          />
         </div>
       </section>
 
@@ -533,6 +562,7 @@ export function CommunityRadar({
           <TabsTrigger value="signals">Recent signals</TabsTrigger>
           <TabsTrigger value="restocks">Restock reports</TabsTrigger>
           <TabsTrigger value="reprints">Reprint watch</TabsTrigger>
+          <TabsTrigger value="research">Web research</TabsTrigger>
           <TabsTrigger value="sources">Information sources</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
         </TabsList>
@@ -561,6 +591,9 @@ export function CommunityRadar({
               </article>
             ))}
           </div>
+        </TabsContent>
+        <TabsContent value="research">
+          <ResearchFindingGrid findings={dashboard.researchFindings} />
         </TabsContent>
         <TabsContent value="sources">
           <SourceConfiguration
@@ -758,6 +791,42 @@ function ConnectorHealth({
         <small>{detail}</small>
       </div>
       {connected ? <CheckCircle2 /> : <XCircle />}
+    </article>
+  );
+}
+
+function ResearchImportHealth({
+  status,
+  signedIn,
+}: {
+  status: CommunityDashboard['researchImport'];
+  signedIn: boolean;
+}) {
+  const healthy = signedIn && status.lastRunStatus === 'completed';
+  return (
+    <article className={cn('community-connector', healthy && 'connected')}>
+      <Search />
+      <div>
+        <span>Web research</span>
+        <strong>
+          {!signedIn
+            ? 'Sign in to view imports'
+            : status.lastRunStatus
+              ? `Last run ${status.lastRunStatus}`
+              : 'Awaiting first import'}
+        </strong>
+        <small>
+          {signedIn
+            ? `Last successful import: ${dateTimeLabel(status.lastSuccessfulImportAt)}`
+            : 'Imports are isolated to your ChatGPT account.'}
+        </small>
+        {status.actionableError ? (
+          <small className="community-research-error">
+            {status.actionableError}
+          </small>
+        ) : null}
+      </div>
+      {healthy ? <CheckCircle2 /> : <AlertTriangle />}
     </article>
   );
 }
@@ -1062,6 +1131,109 @@ function SignalTable({
           </Badge>
         </article>
       ))}
+    </section>
+  );
+}
+
+function researchPrice(finding: ScoutResearchFinding) {
+  if (finding.price === null || finding.currency === null)
+    return 'Price unknown';
+  return new Intl.NumberFormat('nl-NL', {
+    style: 'currency',
+    currency: finding.currency,
+  }).format(finding.price);
+}
+
+function researchLabel(value: string) {
+  return value.replaceAll('_', ' ');
+}
+
+function verificationLabel(value: ScoutResearchFinding['verificationStatus']) {
+  if (value === 'retailer_checked') return 'Retailer checked';
+  if (value === 'official_checked') return 'Official source checked';
+  return 'Community report';
+}
+
+function ResearchFindingGrid({
+  findings,
+}: {
+  findings: ScoutResearchFinding[];
+}) {
+  if (!findings.length)
+    return (
+      <EmptyEvidence label="No web-research findings have been imported for this account." />
+    );
+  return (
+    <section
+      className="community-research-grid"
+      aria-label="ChatGPT web research findings"
+    >
+      {findings.map((finding) => {
+        const sourceUrl = safeResearchUrl(finding.sourceUrl);
+        const evidenceUrl = safeResearchUrl(
+          finding.verificationEvidenceUrl ?? finding.retailerOrOfficialUrl,
+        );
+        return (
+          <article className="community-research-card" key={finding.id}>
+            <header>
+              <div>
+                <span className="signal-platform">Web research</span>
+                <h3>{finding.productName ?? 'Unknown product'}</h3>
+                <small>
+                  {finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}
+                  {finding.productLanguage
+                    ? ` · ${finding.productLanguage}`
+                    : ''}
+                </small>
+              </div>
+              <Badge variant="outline">
+                {researchLabel(finding.updateType)}
+              </Badge>
+            </header>
+            <p>{finding.summary}</p>
+            <dl>
+              <div>
+                <dt>Price</dt>
+                <dd>{researchPrice(finding)}</dd>
+              </div>
+              <div>
+                <dt>Region</dt>
+                <dd>{finding.region ?? 'Unknown'}</dd>
+              </div>
+              <div>
+                <dt>Availability</dt>
+                <dd>{researchLabel(finding.availability)}</dd>
+              </div>
+              <div>
+                <dt>Ships to NL</dt>
+                <dd>{researchLabel(finding.shippingToNetherlands)}</dd>
+              </div>
+              <div>
+                <dt>Verification</dt>
+                <dd>{verificationLabel(finding.verificationStatus)}</dd>
+              </div>
+              <div>
+                <dt>Observed</dt>
+                <dd>{dateTimeLabel(finding.observedAt)}</dd>
+              </div>
+            </dl>
+            <footer>
+              {sourceUrl ? (
+                <a href={sourceUrl} target="_blank" rel="noopener noreferrer">
+                  Original source <ExternalLink />
+                </a>
+              ) : (
+                <span>Source URL unavailable</span>
+              )}
+              {evidenceUrl && evidenceUrl !== sourceUrl ? (
+                <a href={evidenceUrl} target="_blank" rel="noopener noreferrer">
+                  Verification evidence <ExternalLink />
+                </a>
+              ) : null}
+            </footer>
+          </article>
+        );
+      })}
     </section>
   );
 }

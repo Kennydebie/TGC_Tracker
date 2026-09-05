@@ -1341,6 +1341,171 @@ export const communityScanRuns = sqliteTable(
   ],
 );
 
+export const scoutIngestionRuns = sqliteTable(
+  'scout_ingestion_runs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    externalRunId: text('external_run_id').notNull(),
+    payloadHash: text('payload_hash').notNull(),
+    status: text('status').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
+    findingsReceived: integer('findings_received').notNull().default(0),
+    insertedCount: integer('inserted_count').notNull().default(0),
+    updatedCount: integer('updated_count').notNull().default(0),
+    unchangedCount: integer('unchanged_count').notNull().default(0),
+    rejectedCount: integer('rejected_count').notNull().default(0),
+    errorsJson: text('errors_json').notNull().default('[]'),
+    resultJson: text('result_json').notNull().default('{}'),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_scout_ingestion_run_user_external').on(
+      table.userId,
+      table.externalRunId,
+    ),
+    index('idx_scout_ingestion_run_user_finished').on(
+      table.userId,
+      table.finishedAt,
+    ),
+  ],
+);
+
+export const scoutIngestionSourceChecks = sqliteTable(
+  'scout_ingestion_source_checks',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    runId: text('run_id')
+      .notNull()
+      .references(() => scoutIngestionRuns.id, { onDelete: 'cascade' }),
+    sourceIdentifier: text('source_identifier').notNull(),
+    status: text('status').notNull(),
+    checkedAt: integer('checked_at', { mode: 'timestamp_ms' }).notNull(),
+    coverageThrough: integer('coverage_through', { mode: 'timestamp_ms' }),
+    errorCode: text('error_code'),
+    detail: text('detail'),
+    dataMode: text('data_mode').notNull().default('production'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_scout_source_check_user_run_source').on(
+      table.userId,
+      table.runId,
+      table.sourceIdentifier,
+    ),
+    index('idx_scout_source_check_user_source_time').on(
+      table.userId,
+      table.sourceIdentifier,
+      table.checkedAt,
+    ),
+  ],
+);
+
+export const scoutFindings = sqliteTable(
+  'scout_findings',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    dedupeKey: text('dedupe_key').notNull(),
+    sourceKind: text('source_kind').notNull(),
+    sourceIdentifier: text('source_identifier').notNull(),
+    game: text('game').notNull(),
+    productName: text('product_name'),
+    productLanguage: text('product_language'),
+    updateType: text('update_type').notNull(),
+    summary: text('summary').notNull(),
+    sourceUrl: text('source_url'),
+    subreddit: text('subreddit'),
+    sourcePostOrCommentId: text('source_post_or_comment_id'),
+    retailerName: text('retailer_name'),
+    retailerOrOfficialUrl: text('retailer_or_official_url'),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+    firstObservedAt: integer('first_observed_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    lastObservedAt: integer('last_observed_at', {
+      mode: 'timestamp_ms',
+    }).notNull(),
+    priceCents: integer('price_cents'),
+    currency: text('currency'),
+    region: text('region'),
+    shippingToNetherlands: text('shipping_to_netherlands').notNull(),
+    availability: text('availability').notNull(),
+    verificationStatus: text('verification_status').notNull(),
+    verificationEvidenceUrl: text('verification_evidence_url'),
+    verificationObservedAt: integer('verification_observed_at', {
+      mode: 'timestamp_ms',
+    }),
+    verificationEvidenceJson: text('verification_evidence_json'),
+    collectionMethod: text('collection_method')
+      .notNull()
+      .default('chatgpt_web_research'),
+    materialHash: text('material_hash').notNull(),
+    latestRunId: text('latest_run_id')
+      .notNull()
+      .references(() => scoutIngestionRuns.id),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_scout_finding_user_dedupe').on(
+      table.userId,
+      table.dedupeKey,
+    ),
+    index('idx_scout_finding_user_observed').on(
+      table.userId,
+      table.lastObservedAt,
+    ),
+    index('idx_scout_finding_user_source').on(
+      table.userId,
+      table.sourceIdentifier,
+      table.sourcePostOrCommentId,
+    ),
+  ],
+);
+
+export const scoutFindingObservations = sqliteTable(
+  'scout_finding_observations',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    findingId: text('finding_id')
+      .notNull()
+      .references(() => scoutFindings.id, { onDelete: 'cascade' }),
+    runId: text('run_id')
+      .notNull()
+      .references(() => scoutIngestionRuns.id),
+    materialHash: text('material_hash').notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+    payloadJson: text('payload_json').notNull(),
+    dataMode: text('data_mode').notNull().default('production'),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('idx_scout_observation_user_finding_material').on(
+      table.userId,
+      table.findingId,
+      table.materialHash,
+    ),
+    index('idx_scout_observation_user_finding_time').on(
+      table.userId,
+      table.findingId,
+      table.observedAt,
+    ),
+  ],
+);
+
 export const communityWatchRules = sqliteTable(
   'community_watch_rules',
   {

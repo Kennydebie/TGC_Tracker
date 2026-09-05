@@ -4392,6 +4392,10 @@ body::after {
   text-transform: capitalize;
 }
 
+.community-research-error {
+  color: #e6b07c !important;
+}
+
 .community-notice {
   align-items: center;
   background: rgb(111 214 207 / 8%);
@@ -4913,6 +4917,92 @@ body::after {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.community-research-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.community-research-card {
+  background: rgb(7 12 11 / 70%);
+  border: 1px solid #493b2b;
+  border-radius: 0.7rem;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.9rem;
+}
+
+.community-research-card > header,
+.community-research-card > footer {
+  align-items: start;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+.community-research-card h3 {
+  color: var(--community-gold);
+  font-family: var(--font-cinzel), Georgia, serif;
+  font-size: 0.92rem;
+  margin: 0.2rem 0 0.12rem;
+}
+
+.community-research-card header small,
+.community-research-card > p,
+.community-research-card footer span {
+  color: var(--muted-parchment);
+  font-size: 0.7rem;
+}
+
+.community-research-card > p {
+  line-height: 1.55;
+  margin: 0;
+}
+
+.community-research-card dl {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.community-research-card dl > div {
+  background: rgb(255 255 255 / 2.5%);
+  border-radius: 0.45rem;
+  padding: 0.48rem;
+}
+
+.community-research-card dt {
+  color: var(--muted-parchment);
+  font-size: 0.56rem;
+  text-transform: uppercase;
+}
+
+.community-research-card dd {
+  font-size: 0.68rem;
+  margin: 0.16rem 0 0;
+  overflow-wrap: anywhere;
+  text-transform: capitalize;
+}
+
+.community-research-card footer {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.community-research-card footer a {
+  align-items: center;
+  color: var(--community-cyan);
+  display: inline-flex;
+  font-size: 0.68rem;
+  gap: 0.28rem;
+}
+
+.community-research-card footer svg {
+  height: 0.75rem;
+  width: 0.75rem;
+}
+
 .community-reprint-card,
 .community-source-card,
 .community-source-config,
@@ -5341,6 +5431,7 @@ body::after {
   }
   .community-product-grid,
   .community-reprint-grid,
+  .community-research-grid,
   .community-source-health-grid,
   .community-performance-breakdowns {
     grid-template-columns: 1fr;
@@ -5368,6 +5459,9 @@ body::after {
   }
   .community-source-card {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+  .community-research-card dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .community-source-card dl {
     grid-column: 1 / -1;

@@ -214,6 +214,47 @@ export type CommunitySourceStatus = {
   dataMode: CommunityDataMode;
 };
 
+export type ScoutResearchFinding = {
+  id: string;
+  game: 'pokemon' | 'riftbound';
+  productName: string | null;
+  productLanguage: string | null;
+  updateType:
+    | 'deal'
+    | 'restock'
+    | 'preorder'
+    | 'price_change'
+    | 'reprint'
+    | 'release'
+    | 'market_update';
+  summary: string;
+  sourceUrl: string | null;
+  subreddit: string | null;
+  sourceExternalId: string | null;
+  retailerOrOfficialUrl: string | null;
+  publishedAt: string | null;
+  observedAt: string;
+  price: number | null;
+  currency: 'EUR' | 'GBP' | 'USD' | null;
+  region: string | null;
+  shippingToNetherlands: 'confirmed' | 'unavailable' | 'unknown';
+  availability: 'in_stock' | 'preorder' | 'sold_out' | 'unknown';
+  verificationStatus:
+    | 'community_report'
+    | 'retailer_checked'
+    | 'official_checked';
+  verificationEvidenceUrl: string | null;
+  verificationObservedAt: string | null;
+  collectionMethod: 'chatgpt_web_research';
+};
+
+export type ScoutResearchImportStatus = {
+  lastSuccessfulImportAt: string | null;
+  lastAttemptAt: string | null;
+  lastRunStatus: 'completed' | 'partial' | 'failed' | null;
+  actionableError: string | null;
+};
+
 export type CommunityDashboard = {
   generatedAt: string;
   dataMode: CommunityDataMode;
@@ -229,6 +270,8 @@ export type CommunityDashboard = {
   };
   products: CommunityProductRadar[];
   recentSignals: NormalisedCommunitySignal[];
+  researchFindings: ScoutResearchFinding[];
+  researchImport: ScoutResearchImportStatus;
   sources: CommunitySourceStatus[];
   performance: {
     signalsDetected: number;
@@ -273,6 +316,13 @@ export function emptyCommunityDashboard(
     },
     products: [],
     recentSignals: [],
+    researchFindings: [],
+    researchImport: {
+      lastSuccessfulImportAt: null,
+      lastAttemptAt: null,
+      lastRunStatus: null,
+      actionableError: null,
+    },
     sources: options.sources ?? [],
     performance: {
       signalsDetected: 0,

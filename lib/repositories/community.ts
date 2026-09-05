@@ -469,6 +469,13 @@ export async function listCommunityDashboard(
     },
     products,
     recentSignals,
+    researchFindings: [],
+    researchImport: {
+      lastSuccessfulImportAt: null,
+      lastAttemptAt: null,
+      lastRunStatus: null,
+      actionableError: null,
+    },
     sources,
     performance: {
       signalsDetected: Number(perf.total ?? recentSignals.length),
