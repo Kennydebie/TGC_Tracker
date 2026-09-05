@@ -103,6 +103,14 @@ function safeGatewayUrl(value: string | null) {
   }
 }
 
+function safeErrorSummary(error: unknown) {
+  if (!(error instanceof Error)) return 'Unknown request failure.';
+  return `${error.name}: ${error.message}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
 function safeSnowflake(value: unknown): value is string {
   return typeof value === 'string' && /^\d{5,30}$/.test(value);
 }
@@ -228,12 +236,13 @@ export class DiscordGateway extends DurableObject<DiscordGatewayEnvironment> {
     if (Date.now() - this.lastConfigAt >= CONFIG_REFRESH_MS) {
       try {
         await this.syncConfig();
-      } catch {
+      } catch (error) {
         this.configurationFailure = true;
         console.error(
           JSON.stringify({
             service: 'discord-gateway',
             event: 'configuration_sync_failed',
+            reason: safeErrorSummary(error),
           }),
         );
       }
@@ -368,7 +377,7 @@ export class DiscordGateway extends DurableObject<DiscordGatewayEnvironment> {
         'content-type': 'application/json',
       },
       ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(20_000),
     });
   }
@@ -424,8 +433,15 @@ export class DiscordGateway extends DurableObject<DiscordGatewayEnvironment> {
       });
       if (!response.ok)
         throw new Error(`Heartbeat returned HTTP ${response.status}.`);
-    } catch {
+    } catch (error) {
       this.deliveryFailure = true;
+      console.error(
+        JSON.stringify({
+          service: 'discord-gateway',
+          event: 'heartbeat_delivery_failed',
+          reason: safeErrorSummary(error),
+        }),
+      );
       throw new Error('Listener heartbeat failed.');
     }
   }
@@ -437,7 +453,7 @@ export class DiscordGateway extends DurableObject<DiscordGatewayEnvironment> {
         headers: {
           authorization: `Bot ${this.env.DISCORD_BOT_TOKEN?.trim() ?? ''}`,
         },
-        redirect: 'error',
+        redirect: 'manual',
         signal: AbortSignal.timeout(20_000),
       },
     );

@@ -9,6 +9,7 @@ import {
   type DiscordConfig,
   type DiscordMessagePayload,
 } from '../../lib/connectors/discord.ts';
+import { discordSetup } from '../../lib/services/discord-connection.ts';
 import {
   RedditConnector,
   RedditConnectorError,
@@ -230,16 +231,64 @@ void test('Discord health rejects user-token shaped credentials', () => {
 });
 
 void test('Discord health uses the official bot REST identity endpoint', async () => {
-  const requested: URL[] = [];
+  const requested: Array<{ url: URL; redirect: RequestRedirect | undefined }> =
+    [];
   const connector = discordConnector({
-    fetchImpl: async (input) => {
-      requested.push(requestUrl(input));
+    fetchImpl: async (input, init) => {
+      requested.push({ url: requestUrl(input), redirect: init?.redirect });
       return json({ id: '500000000000000001', bot: true });
     },
   });
   const health = await connector.healthCheck();
   assert.equal(health.ok, true);
-  assert.equal(requested[0]?.pathname, '/api/v10/users/@me');
+  assert.equal(requested[0]?.url.pathname, '/api/v10/users/@me');
+  assert.equal(requested[0]?.redirect, 'manual');
+});
+
+void test('Discord setup probes use Cloudflare-supported manual redirects', async (context) => {
+  const redirects: Array<RequestRedirect | undefined> = [];
+  context.mock.method(
+    globalThis,
+    'fetch',
+    async (input: string | URL | Request, init?: RequestInit) => {
+      redirects.push(init?.redirect);
+      const url = requestUrl(input);
+      if (url.pathname.endsWith('/applications/@me'))
+        return json({ id: '500000000000000001', flags: 1 << 18 });
+      if (url.pathname.endsWith('/messages')) return json([]);
+      return json({ guild_id: '800000000000000001', name: 'deals' });
+    },
+  );
+  const db = {
+    prepare() {
+      const statement = {
+        bind() {
+          return statement;
+        },
+        async all() {
+          return { success: true, results: [], meta: { changes: 0 } };
+        },
+        async first() {
+          return null;
+        },
+      };
+      return statement;
+    },
+  } as unknown as D1Database;
+  await discordSetup(
+    db,
+    {
+      DISCORD_BOT_TOKEN: 'fixture.bot.token',
+      DISCORD_APPLICATION_ID: '500000000000000001',
+      DISCORD_GUILD_ALLOWLIST: '800000000000000001',
+      DISCORD_CHANNEL_ALLOWLIST: '700000000000000001',
+      COMMUNITY_INGEST_SECRET: 'fixture-ingestion-secret',
+      COMMUNITY_AUTHOR_HASH_SALT: 'fixture-author-salt',
+      COMMUNITY_ADMIN_EMAIL: 'owner@example.test',
+    } as Cloudflare.Env,
+    true,
+  );
+  assert.deepEqual(redirects, ['manual', 'manual', 'manual']);
 });
 
 void test('Discord Gateway disconnect is surfaced to service health', async () => {
@@ -250,8 +299,12 @@ void test('Discord Gateway disconnect is surfaced to service health', async () =
   }
   const socket = new FakeSocket();
   const statuses: string[] = [];
+  let redirect: RequestRedirect | undefined;
   const connector = discordConnector({
-    fetchImpl: async () => json({ url: 'wss://gateway.discord.test' }),
+    fetchImpl: async (_input, init) => {
+      redirect = init?.redirect;
+      return json({ url: 'wss://gateway.discord.test' });
+    },
     webSocketFactory: () => socket as unknown as WebSocket,
   });
   const service = new DiscordGatewayService(connector, {
@@ -259,6 +312,7 @@ void test('Discord Gateway disconnect is surfaced to service health', async () =
     onStatus: (status) => statuses.push(status),
   });
   await service.start();
+  assert.equal(redirect, 'manual');
   socket.dispatchEvent(new Event('close'));
   assert.deepEqual(statuses, ['disconnected']);
   service.stop();

@@ -226,7 +226,7 @@ export class DiscordConnector {
         `${DISCORD_API_ORIGIN}/api/v${DISCORD_API_VERSION}/users/@me`,
         {
           headers: { authorization: `Bot ${this.config.botToken!.trim()}` },
-          redirect: 'error',
+          redirect: 'manual',
         },
       );
       if (!response.ok) {
@@ -345,7 +345,7 @@ export class DiscordConnector {
       `${DISCORD_API_ORIGIN}/api/v${DISCORD_API_VERSION}/gateway/bot`,
       {
         headers: { authorization: `Bot ${this.config.botToken!.trim()}` },
-        redirect: 'error',
+        redirect: 'manual',
       },
     );
     if (!response.ok) {

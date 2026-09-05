@@ -72,7 +72,7 @@ export async function discordSetup(
     const get = async (path: string) => {
       const response = await fetch(`https://discord.com/api/v10${path}`, {
         headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN!.trim()}` },
-        redirect: 'error',
+        redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok)
