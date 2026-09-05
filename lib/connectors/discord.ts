@@ -9,6 +9,7 @@ const DISCORD_API_VERSION = 10;
 const GUILDS_INTENT = 1 << 0;
 const GUILD_MESSAGES_INTENT = 1 << 9;
 const MESSAGE_CONTENT_INTENT = 1 << 15;
+const IS_CROSSPOST = 1 << 1;
 
 export type DiscordConfig = {
   botToken?: string;
@@ -29,6 +30,14 @@ export type DiscordMessagePayload = {
   content?: string;
   timestamp?: string;
   edited_timestamp?: string | null;
+  flags?: number;
+  webhook_id?: string;
+  message_reference?: {
+    type?: number;
+    guild_id?: string;
+    channel_id?: string;
+    message_id?: string;
+  };
   author?: { id?: string; bot?: boolean; username?: string };
   member?: { nick?: string | null };
   attachments?: Array<{ url?: string }>;
@@ -85,6 +94,54 @@ function parseAllowlist(values: string[] | undefined): string[] {
   return [
     ...new Set((values ?? []).map((item) => item.trim()).filter(safeSnowflake)),
   ];
+}
+
+// Discord sets IS_CROSSPOST for Channel Following. Ordinary webhook senders
+// cannot set this flag. Destination permissions are checked separately below.
+function isFollowedAnnouncement(message: DiscordMessagePayload): boolean {
+  const source = message.message_reference;
+  return Boolean(
+    Number.isSafeInteger(message.flags) &&
+    (message.flags ?? 0) & IS_CROSSPOST &&
+    source &&
+    (source.type === undefined || source.type === 0) &&
+    typeof source.guild_id === 'string' &&
+    safeSnowflake(source.guild_id) &&
+    typeof source.channel_id === 'string' &&
+    safeSnowflake(source.channel_id) &&
+    source.channel_id !== message.channel_id &&
+    typeof source.message_id === 'string' &&
+    safeSnowflake(source.message_id),
+  );
+}
+
+// Keep the Channel Following metadata when relaying Gateway events to the app,
+// so the listener and the ingestion endpoint apply the same acceptance rule.
+export function compactDiscordMessage(
+  message: DiscordMessagePayload,
+): DiscordMessagePayload {
+  return {
+    id: message.id,
+    guild_id: message.guild_id,
+    channel_id: message.channel_id,
+    timestamp: message.timestamp,
+    content: message.content,
+    flags: message.flags,
+    webhook_id: message.webhook_id,
+    message_reference: message.message_reference && {
+      type: message.message_reference.type,
+      guild_id: message.message_reference.guild_id,
+      channel_id: message.message_reference.channel_id,
+      message_id: message.message_reference.message_id,
+    },
+    author: { id: message.author?.id, bot: message.author?.bot },
+    attachments: message.attachments?.map(({ url }) => ({ url })),
+    embeds: message.embeds?.map(({ url, title, description }) => ({
+      url,
+      title,
+      description,
+    })),
+  };
 }
 
 export function isLikelyTcgRelevant(value: string): boolean {
@@ -144,6 +201,7 @@ export class DiscordConnector {
       privateMessagesStored: false,
       explicitGuildAllowlist: true,
       explicitChannelAllowlist: true,
+      followedAnnouncementsAllowed: true,
       rawRetentionHours: Math.max(
         1,
         Math.min(168, this.config.rawRetentionHours ?? 24),
@@ -232,7 +290,10 @@ export class DiscordConnector {
       return { accepted: false, reason: 'guild_not_allowed' };
     if (!this.channelAllowlist.includes(message.channel_id))
       return { accepted: false, reason: 'channel_not_allowed' };
-    if (message.author?.bot)
+    if (
+      (message.author?.bot || message.webhook_id) &&
+      !isFollowedAnnouncement(message)
+    )
       return { accepted: false, reason: 'bot_message_ignored' };
     const attachmentUrls = (message.attachments ?? []).flatMap((item) =>
       item.url ? [item.url] : [],

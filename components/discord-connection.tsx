@@ -229,8 +229,9 @@ export function DiscordConnection({
                     message in your selected channel, without mentioning the
                     bot. For example: “Pokémon Prismatic Evolutions ETB restock
                     €109 at Amazon DE”. Open Recent signals to confirm it
-                    arrived. Direct messages and messages written by bots are
-                    ignored.
+                    arrived. Published announcements followed into a selected
+                    channel are supported. Direct messages and other bot posts
+                    are ignored.
                   </p>
                 </li>
               </ol>

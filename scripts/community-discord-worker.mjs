@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+  compactDiscordMessage,
   DiscordConnector,
   DiscordGatewayService,
 } from '../lib/connectors/discord.ts';
@@ -169,20 +170,7 @@ const gateway = new DiscordGatewayService(connector, {
       deliveryFailure = true;
       throw new Error('Delivery queue full.');
     }
-    const compact = {
-      id: message.id,
-      guild_id: message.guild_id,
-      channel_id: message.channel_id,
-      timestamp: message.timestamp,
-      content: message.content,
-      author: { id: message.author?.id, bot: message.author?.bot },
-      attachments: message.attachments?.map(({ url }) => ({ url })),
-      embeds: message.embeds?.map(({ url, title, description }) => ({
-        url,
-        title,
-        description,
-      })),
-    };
+    const compact = compactDiscordMessage(message);
     pending.push({ queuedAt: Date.now(), message: compact });
     persist();
     void flush();

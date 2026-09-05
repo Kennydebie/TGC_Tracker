@@ -31,11 +31,11 @@ docker compose -f docker-compose.discord.yml logs --tail=50 discord-worker
 The named state volume retains pending messages across restarts, with maximum 24-hour raw retention and a 2,000-event queue cap. Run one worker replica. No port needs exposing. The ordinary Sites web Worker cannot run this Node Gateway listener permanently; deploying the web app does not start this container. No paid host is provisioned by these files.
 
 7. Click Check connection. It checks the app token/application pairing, Message Content flags, each selected channel's server and actual history access, and a worker heartbeat fresher than two minutes. REST access does not prove the worker is running.
-8. Post a normal human message (without mentioning the bot) in an allowed channel, for example: `Pokémon Prismatic Evolutions ETB restock €109 at Amazon DE`. Confirm a real signal and updated last-ingestion time. Check an unselected channel stays excluded. Stop the worker and verify the app reports offline within two minutes.
+8. Verify a real TCG message in an allowed channel, without mentioning the bot, or wait for a relevant published announcement from a followed channel. Confirm a real signal and updated last-ingestion time. Synthetic tests must be clearly identified and excluded from real deal records. Check an unselected channel stays excluded. Stop the worker and verify the app reports offline within two minutes.
 
 ## Boundaries and recovery
 
-- Bot messages and DMs remain excluded. Automated restock-bot feeds need a separately designed trusted-bot allowlist; do not expect those feeds to appear with the current human-message integration.
+- Discord Channel Following announcements are accepted in explicitly selected destination servers and channels. The listener preserves Discord's `IS_CROSSPOST` flag and original message reference, and the app rechecks them. A plain bot message, incoming webhook, reply, or manual forward does not qualify for this exception. Ordinary automated restock-bot feeds and DMs remain excluded.
 - New channel selections grant only read ingestion, never bot installation or permissions. The app rechecks guild/channel pairs on every event.
 - After correcting a 4014 intent error or 4004 authentication error, restart the worker with `docker compose -f docker-compose.discord.yml restart discord-worker`. The app’s Check connection button cannot restart the worker.
 - Discord Gateway READY/RESUMED establish connection. Heartbeat ACK failures trigger reconnect/resume with backoff. Fatal authentication/intent errors stop reconnect loops.
