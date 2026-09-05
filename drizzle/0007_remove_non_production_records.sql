@@ -145,19 +145,45 @@ WHERE (
     id IN ('prod-pe-etb', 'prod-rfb-origins')
     OR id LIKE 'demo-product:%'
   )
-  AND id NOT IN (
-    SELECT product_id FROM listings WHERE product_id IS NOT NULL
-    UNION SELECT product_id FROM price_observations
-    UNION SELECT product_id FROM valuation_snapshots
-    UNION SELECT product_id FROM watchlist_items WHERE product_id IS NOT NULL
-    UNION SELECT product_id FROM alerts WHERE product_id IS NOT NULL
-    UNION SELECT product_id FROM inventory_lots
-    UNION SELECT canonical_product_id FROM amazon_marketplace_products
-      WHERE canonical_product_id IS NOT NULL
-    UNION SELECT canonical_product_id FROM community_signals
-      WHERE canonical_product_id IS NOT NULL
-    UNION SELECT canonical_product_id FROM community_signal_events
-      WHERE canonical_product_id IS NOT NULL
-    UNION SELECT canonical_product_id FROM community_product_momentum
-    UNION SELECT canonical_product_id FROM community_watch_rules
+  AND NOT EXISTS (
+    SELECT 1 FROM listings WHERE listings.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM price_observations
+    WHERE price_observations.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM valuation_snapshots
+    WHERE valuation_snapshots.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM watchlist_items
+    WHERE watchlist_items.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM alerts WHERE alerts.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM inventory_lots
+    WHERE inventory_lots.product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM amazon_marketplace_products
+    WHERE amazon_marketplace_products.canonical_product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM community_signals
+    WHERE community_signals.canonical_product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM community_signal_events
+    WHERE community_signal_events.canonical_product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM community_product_momentum
+    WHERE community_product_momentum.canonical_product_id = products.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM community_watch_rules
+    WHERE community_watch_rules.canonical_product_id = products.id
   );
