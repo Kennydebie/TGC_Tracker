@@ -29,14 +29,19 @@ const userB: RequestUser = {
   displayName: 'User B',
 };
 
-function applyMigrations(database: DatabaseSync) {
+function applyMigrationFile(database: DatabaseSync, file: string) {
+  const migration = readFileSync(`drizzle/${file}`, 'utf8');
+  for (const statement of migration.split('--> statement-breakpoint')) {
+    if (statement.trim()) database.exec(statement);
+  }
+}
+
+function applyMigrations(database: DatabaseSync, through = '9999') {
   for (const file of readdirSync('drizzle')
     .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+    .filter((name) => name.slice(0, 4) <= through)
     .sort()) {
-    const migration = readFileSync(`drizzle/${file}`, 'utf8');
-    for (const statement of migration.split('--> statement-breakpoint')) {
-      if (statement.trim()) database.exec(statement);
-    }
+    applyMigrationFile(database, file);
   }
   database.exec('PRAGMA foreign_keys = ON');
 }
@@ -216,6 +221,161 @@ function count(database: DatabaseSync, table: string): number {
       0,
   );
 }
+
+void test('One Piece migration preserves findings, observations, constraints, and indexes', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite, '0011');
+  const db = asD1(sqlite);
+  try {
+    const before = payload('run:before-one-piece-migration');
+    const savedBefore = await saveScoutFindings(
+      db,
+      userA,
+      before,
+      after(before.run.finishedAt),
+    );
+    assert.equal(savedBefore.inserted, 1);
+    assert.equal(count(sqlite, 'scout_findings'), 1);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+
+    applyMigrationFile(sqlite, '0012_dashing_alex_wilder.sql');
+
+    assert.equal(count(sqlite, 'scout_findings'), 1);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+    assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
+    const findingIndexes = sqlite
+      .prepare("PRAGMA index_list('scout_findings')")
+      .all()
+      .map((row) => String(row.name));
+    assert.ok(findingIndexes.includes('idx_scout_finding_user_dedupe'));
+    assert.ok(findingIndexes.includes('idx_scout_finding_user_event'));
+    const observationIndexes = sqlite
+      .prepare("PRAGMA index_list('scout_finding_observations')")
+      .all()
+      .map((row) => String(row.name));
+    assert.ok(
+      observationIndexes.includes(
+        'idx_scout_observation_user_finding_material',
+      ),
+    );
+
+    const onePiece = payload('run:one-piece-after-migration', {
+      observedAt: '2026-09-05T21:02:00Z',
+    });
+    onePiece.findings[0] = {
+      ...onePiece.findings[0],
+      game: 'one_piece',
+      headline: 'TEST RECORD: One Piece release',
+      productName: 'TEST RECORD: One Piece TCG product',
+      sourcePostOrCommentId: 'comment:one-piece-test',
+      sourceUrl:
+        'https://www.reddit.com/r/PokemonTCGNL/comments/test/comment/one-piece-test',
+      eventAt: '2026-10-01',
+    };
+    const savedOnePiece = await saveScoutFindings(
+      db,
+      userA,
+      onePiece,
+      after(onePiece.run.finishedAt),
+    );
+    assert.equal(savedOnePiece.inserted, 1);
+    const dashboard = await listScoutResearchDashboard(db, userA);
+    assert.equal(
+      dashboard.findings.find(
+        (finding) => finding.headline === 'TEST RECORD: One Piece release',
+      )?.game,
+      'one_piece',
+    );
+    assert.equal(
+      dashboard.roadmapFindings.find(
+        (finding) => finding.headline === 'TEST RECORD: One Piece release',
+      )?.game,
+      'one_piece',
+    );
+
+    assert.throws(() =>
+      sqlite
+        .prepare('UPDATE scout_findings SET game = ? WHERE headline = ?')
+        .run('unknown_tcg', 'TEST RECORD: One Piece release'),
+    );
+    assert.throws(() =>
+      sqlite
+        .prepare(
+          'UPDATE scout_findings SET currency = ?, price_cents = ? WHERE headline = ?',
+        )
+        .run('CAD', 100, 'TEST RECORD: One Piece release'),
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('source coverage key authorizes exact items but rejects a mismatched item key', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  try {
+    const shared = payload('run:shared-source-key');
+    shared.run.sourceChecks[0].sourceIdentifier = 'retailer:dreamland-nl';
+    shared.findings = ['product:invitation-a', 'product:invitation-b'].map(
+      (sourcePostOrCommentId, index) => ({
+        ...shared.findings[0],
+        sourceKind: 'retailer' as const,
+        sourceIdentifier: 'retailer:dreamland-nl',
+        headline: `TEST RECORD: DreamLand invitation ${index + 1}`,
+        sourceUrl: `https://www.example.test/dreamland/invitation-${index + 1}`,
+        subreddit: null,
+        sourcePostOrCommentId,
+        retailerName: 'DreamLand NL',
+        verificationStatus: 'retailer_checked' as const,
+        verificationEvidence: {
+          url: `https://www.example.test/dreamland/invitation-${index + 1}`,
+          observedAt: shared.run.finishedAt,
+          note: 'TEST RECORD: retailer page checked.',
+        },
+      }),
+    );
+    const accepted = await saveScoutFindings(
+      db,
+      userA,
+      shared,
+      after(shared.run.finishedAt),
+    );
+    assert.equal(accepted.inserted, 2);
+    assert.equal(accepted.rejected, 0);
+    assert.equal(new Set(accepted.recordIds).size, 2);
+
+    const mismatch = payload('run:mismatched-source-key', {
+      observedAt: '2026-09-05T21:02:00Z',
+    });
+    mismatch.run.sourceChecks[0].sourceIdentifier = 'retailer:dreamland-nl';
+    mismatch.findings[0] = {
+      ...mismatch.findings[0],
+      sourceKind: 'retailer',
+      sourceIdentifier: 'dreamland:product:invitation-c',
+      sourceUrl: 'https://www.example.test/dreamland/invitation-c',
+      subreddit: null,
+      sourcePostOrCommentId: 'product:invitation-c',
+      retailerName: 'DreamLand NL',
+    };
+    const rejected = await saveScoutFindings(
+      db,
+      userA,
+      mismatch,
+      after(mismatch.run.finishedAt),
+    );
+    assert.equal(rejected.inserted, 0);
+    assert.equal(rejected.rejected, 1);
+    assert.equal(rejected.errors[0]?.code, 'source_not_checked');
+    assert.match(
+      rejected.errors[0]?.message ?? '',
+      /same stable source-check key/i,
+    );
+    assert.match(rejected.errors[0]?.message ?? '', /sourcePostOrCommentId/);
+  } finally {
+    sqlite.close();
+  }
+});
 
 void test('imports are retry-safe, update material facts, and preserve seller identity', async () => {
   const sqlite = new DatabaseSync(':memory:');

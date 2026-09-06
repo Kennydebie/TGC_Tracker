@@ -147,7 +147,7 @@ export function compactDiscordMessage(
 export function isLikelyTcgRelevant(value: string): boolean {
   const text = value.toLowerCase();
   const product =
-    /pokemon|pokémon|riftbound|spiritforged|prismatic|destined rivals|booster|\betb\b|tcg|cardmarket/;
+    /pokemon|pokémon|one[ -]?piece|onepiece|\bopcg\b|riftbound|spiritforged|prismatic|destined rivals|booster|\betb\b|tcg|cardmarket/;
   const actionable =
     /restock|stock|available|sold out|\boos\b|deal|discount|price|€|£|\$|reprint|release|tournament|ban|scam|shortage|allocation|store|amazon|ebay|marktplaats/;
   return product.test(text) && actionable.test(text);

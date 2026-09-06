@@ -80,7 +80,7 @@ prevents unattended writes.
 Use this prompt for the hourly `TCG Community Scout` scheduled task:
 
 ```text
-Act as my hourly TCG Scout market-intelligence researcher for Pokémon and Riftbound, focused on opportunities relevant to a buyer in the Netherlands and wider EU.
+Act as my hourly TCG Scout market-intelligence researcher for Pokémon, One Piece TCG and Riftbound, focused on opportunities relevant to a buyer in the Netherlands and wider EU.
 
 At the start of every run, call get_scout_ingestion_state. Use its recent runs, source coverage, identifiers and material hashes to avoid duplicate work and to distinguish a retry from a new run.
 
@@ -94,7 +94,7 @@ Research broadly. Do not limit the run to Reddit. Check relevant:
 Look especially for time-sensitive registrations, exclusive products, releases, preorder windows, restocks, allocations, cancellations, reprints, material price or supply changes, competitive catalysts and credible warnings. Exclude generic chatter. Recheck and resubmit every still-actionable finding and future milestone from prior state when its source is checked, even when its facts are unchanged; this refreshes verification without making it look materially new.
 
 Evidence rules:
-- Preserve the exact source URL and a stable sourceIdentifier for every finding. Add one unique sourceChecks entry for every source checked, including inaccessible or failed sources.
+- Add one unique sourceChecks entry for every concrete source actually checked, including inaccessible or failed sources. Its sourceIdentifier is a stable coverage key, such as retailer:dreamland-nl, marketplace:ebay-nl or reddit:r/riftboundtcg. Copy that exact same sourceIdentifier into every finding obtained from that checked source. Put the individual post, comment, listing or article ID in sourcePostOrCommentId and preserve its exact permalink in sourceUrl. For example, a DreamLand page check and its finding both use retailer:dreamland-nl; the page/product identifier and URL belong in sourcePostOrCommentId and sourceUrl. Broad trackedSources category labels are discovery hints, not proof that each member source was checked.
 - Never invent a date, deadline, availability, stock quantity, shipping claim, price, source or verification. Use null or unknown when evidence is absent.
 - Use publishedAt only for the source publication time. Use eventAt for the actual release or event, actionOpensAt for the opening of an actionable window, and actionDeadlineAt for a sourced closing deadline. Run, observation, publication and verification timestamps must include an offset. A milestone may be YYYY-MM-DD only when the source publishes a date without a time; never invent a time or offset.
 - Use verificationStatus=official_checked only after checking an official source, retailer_checked only after checking the named retailer or marketplace page, and community_report for an unverified public report. Checked findings require the exact verificationEvidence URL and observation time.
@@ -114,5 +114,5 @@ Safety rules:
 
 For each new hourly run, create a fresh stable run.id such as hourly-scout:YYYY-MM-DDTHH-mmZ. Reuse a run ID only to retry the byte-equivalent logical payload after an uncertain response; otherwise use a new ID. Save no more than 25 findings and 20 source checks per call, prioritizing imminent active items for re-verification. Use an empty findings array only when nothing changed and no still-actionable or future-milestone record was rechecked; always keep source coverage honest.
 
-After research, call save_scout_findings once with the complete validated payload. Report the run status and inserted, updated, unchanged and rejected counts. If business validation rejects individual findings after accepted records were saved, use a new run ID containing only corrected rejected records. Reuse the original run ID only for a byte-equivalent retry after an uncertain or persistence-failed response. Never weaken provenance or invent missing facts.
+Before saving, verify that every finding.sourceIdentifier exactly matches one sourceChecks entry whose status is checked. After research, call save_scout_findings once with the complete validated payload. Report the run status and inserted, updated, unchanged and rejected counts. If business validation rejects individual findings after accepted records were saved, correct the sourceIdentifier/sourceChecks mapping and use a new run ID containing only corrected rejected records. Reuse the original run ID only for a byte-equivalent retry after an uncertain or persistence-failed response. Never weaken provenance or invent missing facts.
 ```

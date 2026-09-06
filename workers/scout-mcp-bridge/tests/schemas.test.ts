@@ -49,6 +49,22 @@ describe('finding contract', () => {
     expect(parsed.findings[0]?.collectionMethod).toBe('chatgpt_web_research');
   });
 
+  it('accepts One Piece TCG and rejects unknown games', () => {
+    const onePiece = structuredClone(base) as unknown as {
+      findings: Array<Record<string, unknown>>;
+    };
+    if (onePiece.findings[0]) onePiece.findings[0].game = 'one_piece';
+    const parsed = saveFindingsInputSchema.safeParse(onePiece);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.findings[0]?.game).toBe('one_piece');
+
+    const unknown = structuredClone(base) as unknown as {
+      findings: Array<Record<string, unknown>>;
+    };
+    if (unknown.findings[0]) unknown.findings[0].game = 'unknown_tcg';
+    expect(saveFindingsInputSchema.safeParse(unknown).success).toBe(false);
+  });
+
   it('requires price and currency together', () => {
     const invalid = structuredClone(base) as Record<string, unknown>;
     const findings = invalid.findings as Array<Record<string, unknown>>;

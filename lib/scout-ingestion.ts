@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { normaliseCommunityText, redactPersonalData } from './community.ts';
+import { SCOUT_GAMES } from './scout-games.ts';
 
 export const SCOUT_COLLECTION_METHOD = 'chatgpt_web_research' as const;
 export const SCOUT_MAX_BATCH_SIZE = 25;
@@ -10,27 +11,27 @@ export const SCOUT_TRACKED_SOURCES = [
   {
     sourceIdentifier: 'official:publishers-and-organizers',
     description:
-      'Official Pokémon and Riftbound publisher, distributor, event and registration updates.',
+      'Discovery category only—not a source-check key. Check concrete official Pokémon, One Piece TCG and Riftbound publisher, distributor, event and registration sources.',
   },
   {
     sourceIdentifier: 'marketplaces:eu',
     description:
-      'Relevant eBay, Amazon and Marktplaats listings or material price changes for NL/EU buyers.',
+      'Discovery category only—not a source-check key. Check concrete eBay, Amazon and Marktplaats sources for relevant NL/EU listings or material price changes.',
   },
   {
     sourceIdentifier: 'retailers:eu',
     description:
-      'NL/EU retailer stock, preorder, allocation, signup and cancellation updates.',
+      'Discovery category only—not a source-check key. Check concrete NL/EU retailer sources for stock, preorder, allocation, signup and cancellation updates.',
   },
   {
     sourceIdentifier: 'community:public',
     description:
-      'Relevant public Reddit, Discord, forum, news and social reports with original provenance.',
+      'Discovery category only—not a source-check key. Check concrete public Reddit, Discord, forum, news and social sources and retain original provenance.',
   },
   {
     sourceIdentifier: 'market-evidence:public',
     description:
-      'Source-backed completed-sale, supply and demand evidence; active asks stay separate from sold evidence.',
+      'Discovery category only—not a source-check key. Check concrete sources for completed-sale, supply and demand evidence; active asks stay separate from sold evidence.',
   },
 ] as const;
 
@@ -96,7 +97,14 @@ function actionWindowIsReversed(opensAt: string, deadlineAt: string): boolean {
 
 export const scoutSourceCheckSchema = z
   .object({
-    sourceIdentifier: z.string().trim().min(1).max(200),
+    sourceIdentifier: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe(
+        'Stable coverage key for the concrete source actually checked. Copy this exact key into every finding obtained from this source.',
+      ),
     status: z.enum(['checked', 'inaccessible', 'failed']),
     checkedAt: timestamp,
     coverageThrough: nullableTimestamp,
@@ -157,8 +165,15 @@ export const scoutFindingSchema = z
       'official',
       'public_web',
     ]),
-    sourceIdentifier: z.string().trim().min(1).max(200),
-    game: z.enum(['pokemon', 'riftbound']),
+    sourceIdentifier: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe(
+        'Stable coverage key copied exactly from the matching checked run.sourceChecks entry. Do not put the individual post, listing or article ID here.',
+      ),
+    game: z.enum(SCOUT_GAMES),
     headline: nullableText(180),
     productName: nullableText(240),
     productLanguage: nullableText(64),
@@ -174,7 +189,9 @@ export const scoutFindingSchema = z
     summary: z.string().trim().min(1).max(800),
     sourceUrl: nullableUrl,
     subreddit: nullableText(80),
-    sourcePostOrCommentId: nullableText(200),
+    sourcePostOrCommentId: nullableText(200).describe(
+      'Exact external post, comment, listing or article identifier when one exists. This identifies the item within the checked source; it is not the sourceIdentifier coverage key.',
+    ),
     retailerName: nullableText(160),
     retailerOrOfficialUrl: nullableUrl,
     publishedAt: nullableTimestamp,

@@ -220,10 +220,10 @@ export function createScoutMcpServer(
   dependencies: ServerDependencies = {},
 ): McpServer {
   const server = new McpServer(
-    { name: 'tcg-scout-community-radar', version: '1.0.0' },
+    { name: 'tcg-scout-community-radar', version: '1.1.0' },
     {
       instructions:
-        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources. Preserve unknown facts and original provenance, use stable retry-safe run IDs, record dates or exact times only as published, never treat asking prices as profit, ROI, or a purchase recommendation, and report the returned import counts.',
+        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources for Pokémon, One Piece TCG and Riftbound. Every finding.sourceIdentifier must exactly copy a sourceIdentifier from the same run whose status is checked; place the exact post, comment, listing or article ID in sourcePostOrCommentId and the permalink in sourceUrl. Preserve unknown facts and original provenance, use stable retry-safe run IDs, record dates or exact times only as published, never treat asking prices as profit, ROI, or a purchase recommendation, and report the returned import counts. Retry only corrected rejected records with a new run ID.',
     },
   );
   const authProps = dependencies.authProps ?? getMcpAuthContext()?.props;
@@ -276,7 +276,7 @@ export function createScoutMcpServer(
     {
       title: 'Save TCG Scout findings',
       description:
-        'Validate and save up to 25 source-backed Pokémon or Riftbound market-intelligence findings with retry-safe source coverage for this authorized account. Include exact release/event dates and action deadlines when sourced; preserve unknown values and provenance.',
+        'Validate and save up to 25 source-backed Pokémon, One Piece TCG or Riftbound market-intelligence findings with retry-safe source coverage for this authorized account. Every finding must copy sourceIdentifier exactly from its checked run.sourceChecks entry; keep the individual post, listing or article ID in sourcePostOrCommentId and its permalink in sourceUrl. Include exact release/event dates and action deadlines when sourced; preserve unknown values and provenance.',
       inputSchema: saveFindingsInputSchema,
       outputSchema: saveFindingsOutputSchema,
       annotations: {

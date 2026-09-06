@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 
 import type { RequestUser } from '../server/user.ts';
+import { SCOUT_GAMES } from '../scout-games.ts';
 import {
   ScoutIngestionValidationError,
   ScoutRunConflictError,
@@ -90,7 +91,13 @@ const SOURCE_CHECK_SCHEMA = {
   additionalProperties: false,
   required: ['sourceIdentifier', 'status', 'checkedAt'],
   properties: {
-    sourceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
+    sourceIdentifier: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 200,
+      description:
+        'Stable coverage key for the concrete source actually checked. Copy this exact key into every finding obtained from this source.',
+    },
     status: { enum: ['checked', 'inaccessible', 'failed'] },
     checkedAt: timestamp,
     coverageThrough: nullableTimestamp,
@@ -158,8 +165,14 @@ const FINDING_SCHEMA = {
         'public_web',
       ],
     },
-    sourceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
-    game: { enum: ['pokemon', 'riftbound'] },
+    sourceIdentifier: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 200,
+      description:
+        'Stable coverage key copied exactly from the matching checked run.sourceChecks entry. Put the individual post, listing or article ID in sourcePostOrCommentId instead.',
+    },
+    game: { enum: SCOUT_GAMES },
     headline: { ...nullableString, maxLength: 180 },
     productName: { ...nullableString, maxLength: 240 },
     productLanguage: { ...nullableString, maxLength: 64 },
@@ -177,7 +190,12 @@ const FINDING_SCHEMA = {
     summary: { type: 'string', minLength: 1, maxLength: 800 },
     sourceUrl: nullableUrl,
     subreddit: { ...nullableString, maxLength: 80 },
-    sourcePostOrCommentId: { ...nullableString, maxLength: 200 },
+    sourcePostOrCommentId: {
+      ...nullableString,
+      maxLength: 200,
+      description:
+        'Exact external post, comment, listing or article identifier, or null. This identifies the item within the checked source and is not the sourceIdentifier coverage key.',
+    },
     retailerName: { ...nullableString, maxLength: 160 },
     retailerOrOfficialUrl: nullableUrl,
     publishedAt: nullableTimestamp,
@@ -336,7 +354,7 @@ export const SAVE_FINDINGS_INPUT_SCHEMA = {
           minItems: 1,
           maxItems: 20,
           description:
-            'One entry per unique sourceIdentifier; every finding must reference a checked source.',
+            'One entry per concrete source actually checked. Every finding must copy the exact sourceIdentifier from one entry whose status is checked.',
           items: SOURCE_CHECK_SCHEMA,
         },
       },
@@ -513,7 +531,7 @@ const tools = [
     name: 'save_scout_findings',
     title: 'Save TCG Scout findings',
     description:
-      'Validate and save up to 25 source-backed Pokémon or Riftbound market-intelligence findings plus retry-safe source coverage for the signed-in account. Findings may come from official sites, organizers, retailers, marketplaces, news, Reddit, Discord or other public web sources. Preserve unknown values, original provenance, and sourced event/action dates without inventing a time. Scheduled findings are not purchase recommendations. Call get_scout_ingestion_state first.',
+      'Validate and save up to 25 source-backed Pokémon, One Piece TCG or Riftbound market-intelligence findings plus retry-safe source coverage for the signed-in account. Findings may come from official sites, organizers, retailers, marketplaces, news, Reddit, Discord or other public web sources. For every finding, copy sourceIdentifier exactly from its checked run.sourceChecks entry; keep the exact post, listing or article ID in sourcePostOrCommentId and its permalink in sourceUrl. Preserve unknown values, original provenance, and sourced event/action dates without inventing a time. Scheduled findings are not purchase recommendations. Call get_scout_ingestion_state first.',
     inputSchema: SAVE_FINDINGS_INPUT_SCHEMA,
     outputSchema: SAVE_FINDINGS_OUTPUT_SCHEMA,
     annotations: {
@@ -628,11 +646,11 @@ function ok(
 
 export function createScoutMcpServer(context: ScoutMcpContext): Server {
   const server = new Server(
-    { name: 'tcg-scout-community-radar', version: '1.0.0' },
+    { name: 'tcg-scout-community-radar', version: '1.1.0' },
     {
       capabilities: { tools: {} },
       instructions:
-        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources. Use stable run IDs, preserve unknown facts, retain source provenance, and record dates or exact times only as published. Never turn an asking price into profit, ROI, or a purchase recommendation. Report the returned import counts.',
+        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources for Pokémon, One Piece TCG and Riftbound. Every finding.sourceIdentifier must exactly copy a sourceIdentifier from the same run whose status is checked; place the exact post, comment, listing or article ID in sourcePostOrCommentId and the permalink in sourceUrl. Use stable run IDs, preserve unknown facts, retain source provenance, and record dates or exact times only as published. Never turn an asking price into profit, ROI, or a purchase recommendation. Report the returned import counts and retry only corrected rejected records with a new run ID.',
     },
   );
   server.setRequestHandler(

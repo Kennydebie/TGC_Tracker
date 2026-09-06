@@ -1,3 +1,5 @@
+import type { ScoutGame } from './scout-games.ts';
+
 export const COMMUNITY_SIGNAL_TYPES = [
   'RESTOCK_REPORT',
   'DEAL_REPORT',
@@ -223,7 +225,7 @@ export type ScoutResearchFinding = {
     | 'official'
     | 'public_web';
   sourceIdentifier: string;
-  game: 'pokemon' | 'riftbound';
+  game: ScoutGame;
   headline: string | null;
   productName: string | null;
   productLanguage: string | null;

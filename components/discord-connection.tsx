@@ -83,7 +83,7 @@ export function DiscordConnection({
           externalCommunityId: guild,
           externalChannelId: channel,
           enabled: true,
-          games: ['Pokémon', 'Riftbound'],
+          games: ['Pokémon', 'One Piece TCG', 'Riftbound'],
           categories: ['Deals', 'Restocks', 'Prices', 'Reprints'],
         }),
       });

@@ -9,6 +9,8 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
+import type { ScoutGame } from '../lib/scout-games.ts';
+
 const timestamps = {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
@@ -1471,7 +1473,7 @@ export const scoutFindings = sqliteTable(
     dedupeKey: text('dedupe_key').notNull(),
     sourceKind: text('source_kind').notNull(),
     sourceIdentifier: text('source_identifier').notNull(),
-    game: text('game').notNull(),
+    game: text('game').$type<ScoutGame>().notNull(),
     headline: text('headline'),
     productName: text('product_name'),
     productLanguage: text('product_language'),
@@ -1554,6 +1556,46 @@ export const scoutFindings = sqliteTable(
       table.sourceIdentifier,
       table.sourcePostOrCommentId,
     ),
+    check(
+      'scout_findings_source_kind_check',
+      sql`${table.sourceKind} IN ('reddit_post', 'reddit_comment', 'retailer', 'official', 'public_web')`,
+    ),
+    check(
+      'scout_findings_game_check',
+      sql`${table.game} IN ('pokemon', 'one_piece', 'riftbound')`,
+    ),
+    check(
+      'scout_findings_update_type_check',
+      sql`${table.updateType} IN ('deal', 'restock', 'preorder', 'price_change', 'reprint', 'release', 'market_update')`,
+    ),
+    check(
+      'scout_findings_currency_check',
+      sql`${table.currency} IS NULL OR ${table.currency} IN ('EUR', 'GBP', 'USD')`,
+    ),
+    check(
+      'scout_findings_shipping_check',
+      sql`${table.shippingToNetherlands} IN ('confirmed', 'unavailable', 'unknown')`,
+    ),
+    check(
+      'scout_findings_availability_check',
+      sql`${table.availability} IN ('in_stock', 'preorder', 'sold_out', 'unknown')`,
+    ),
+    check(
+      'scout_findings_verification_status_check',
+      sql`${table.verificationStatus} IN ('community_report', 'retailer_checked', 'official_checked')`,
+    ),
+    check(
+      'scout_findings_collection_method_check',
+      sql`${table.collectionMethod} = 'chatgpt_web_research'`,
+    ),
+    check(
+      'scout_findings_data_mode_check',
+      sql`${table.dataMode} = 'production'`,
+    ),
+    check(
+      'scout_findings_price_currency_check',
+      sql`((${table.priceCents} IS NULL AND ${table.currency} IS NULL) OR (${table.priceCents} IS NOT NULL AND ${table.currency} IS NOT NULL))`,
+    ),
   ],
 );
 
@@ -1586,6 +1628,10 @@ export const scoutFindingObservations = sqliteTable(
       table.userId,
       table.findingId,
       table.observedAt,
+    ),
+    check(
+      'scout_finding_observations_data_mode_check',
+      sql`${table.dataMode} = 'production'`,
     ),
   ],
 );

@@ -94,6 +94,21 @@ void test('validation preserves explicitly unknown facts and defaults the collec
   assert.equal(parsed.findings[0].collectionMethod, 'chatgpt_web_research');
 });
 
+void test('validation accepts One Piece TCG and rejects unknown games', () => {
+  const onePiece = input();
+  onePiece.findings[0].game = 'one_piece';
+  assert.equal(
+    validateScoutImportInput(onePiece).findings[0].game,
+    'one_piece',
+  );
+
+  const unknown = input() as unknown as {
+    findings: Array<Record<string, unknown>>;
+  };
+  if (unknown.findings[0]) unknown.findings[0].game = 'unknown_tcg';
+  assert.throws(() => validateScoutImportInput(unknown));
+});
+
 void test('validation rejects malformed provenance, timestamps, URLs, and checked claims without evidence', () => {
   const malformed = input() as unknown as Record<string, unknown>;
   const findings = malformed.findings as Array<Record<string, unknown>>;

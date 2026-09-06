@@ -48,7 +48,7 @@ type ScoutDashboardRow = {
   id: string;
   source_kind: ScoutFindingInput['sourceKind'];
   source_identifier: string;
-  game: 'pokemon' | 'riftbound';
+  game: ScoutFindingInput['game'];
   headline: string | null;
   product_name: string | null;
   product_language: string | null;
@@ -238,7 +238,7 @@ function businessValidate(
         code: 'source_not_checked',
         path: `findings.${entry.index}.sourceIdentifier`,
         message:
-          'The finding source must have a checked source entry in this run.',
+          'No checked run.sourceChecks entry matches this finding.sourceIdentifier. Copy the same stable source-check key into both records; keep the exact post, listing or article ID in sourcePostOrCommentId and its permalink in sourceUrl.',
       });
       continue;
     }

@@ -24,6 +24,7 @@ import type {
   ScoutResearchImportStatus,
 } from '@/lib/community';
 import { money } from '@/lib/domain';
+import { scoutGameLabel } from '@/lib/scout-games';
 import {
   checkedScoutActionUrl,
   isScoutDateOnly,
@@ -267,12 +268,13 @@ function RoadmapMilestoneCard({
   return (
     <li
       className={cn(
-        'scout-roadmap-milestone',
+        'scout-roadmap-milestone scout-game-entry',
         `attention-${milestone.attention}`,
         `temporal-${milestone.temporalState}`,
         `provenance-${milestone.provenance}`,
         milestone.precision === 'date' && 'precision-date',
       )}
+      data-game={milestone.finding.game}
     >
       <div className="scout-roadmap-date">
         <time
@@ -286,8 +288,8 @@ function RoadmapMilestoneCard({
       </div>
       <div className="scout-roadmap-copy">
         <div className="scout-roadmap-meta">
-          <span>
-            {milestone.finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}
+          <span className="scout-game-tag" data-game={milestone.finding.game}>
+            {scoutGameLabel(milestone.finding.game)}
           </span>
           <strong>{roadmapStatus(milestone)}</strong>
         </div>
@@ -718,11 +720,12 @@ export function ScoutBoardIntelligence({
                   return (
                     <article
                       className={cn(
-                        'scout-priority-card',
+                        'scout-priority-card scout-game-entry',
                         `attention-${assessment.level}`,
                         `freshness-${assessment.freshness}`,
                         activeDate && 'has-active-date',
                       )}
+                      data-game={finding.game}
                       key={finding.id}
                     >
                       <header>
@@ -741,10 +744,17 @@ export function ScoutBoardIntelligence({
                         {assessment.reason}
                       </p>
                       <div className="scout-priority-title">
-                        <small>
-                          {finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}{' '}
-                          · {finding.updateType.replaceAll('_', ' ')}
-                        </small>
+                        <div className="scout-priority-kicker">
+                          <span
+                            className="scout-game-tag"
+                            data-game={finding.game}
+                          >
+                            {scoutGameLabel(finding.game)}
+                          </span>
+                          <small>
+                            {finding.updateType.replaceAll('_', ' ')}
+                          </small>
+                        </div>
                         <h4>{findingTitle(finding)}</h4>
                         <span>{sourceLabel(finding)}</span>
                       </div>

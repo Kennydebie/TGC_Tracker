@@ -85,6 +85,13 @@
       "when": 1788700158137,
       "tag": "0011_scout_board_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788705890111,
+      "tag": "0012_dashing_alex_wilder",
+      "breakpoints": true
     }
   ]
 }

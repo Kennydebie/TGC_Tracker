@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const COLLECTION_METHOD = 'chatgpt_web_research' as const;
 
+export const SCOUT_GAMES = ['pokemon', 'one_piece', 'riftbound'] as const;
+
 export const ACTION_TYPES = [
   'register',
   'preorder',
@@ -70,7 +72,14 @@ export const getStateInputSchema = z
 
 export const sourceCheckSchema = z
   .object({
-    sourceIdentifier: z.string().trim().min(1).max(200),
+    sourceIdentifier: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe(
+        'Stable coverage key for the concrete source actually checked. Copy this exact key into every finding obtained from this source.',
+      ),
     status: z.enum(['checked', 'inaccessible', 'failed']),
     checkedAt: timestampSchema,
     coverageThrough: timestampSchema.nullable().optional().default(null),
@@ -132,8 +141,15 @@ export const findingSchema = z
       'official',
       'public_web',
     ]),
-    sourceIdentifier: z.string().trim().min(1).max(200),
-    game: z.enum(['pokemon', 'riftbound']),
+    sourceIdentifier: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe(
+        'Stable coverage key copied exactly from the matching checked run.sourceChecks entry. Put the individual post, listing or article ID in sourcePostOrCommentId instead.',
+      ),
+    game: z.enum(SCOUT_GAMES),
     headline: nullableText(180),
     productName: nullableText(240),
     productLanguage: nullableText(64),
@@ -149,7 +165,9 @@ export const findingSchema = z
     summary: z.string().trim().min(1).max(800),
     sourceUrl: nullableUrlSchema,
     subreddit: nullableText(80),
-    sourcePostOrCommentId: nullableText(200),
+    sourcePostOrCommentId: nullableText(200).describe(
+      'Exact external post, comment, listing or article identifier, or null. This identifies the item within the checked source and is not the sourceIdentifier coverage key.',
+    ),
     retailerName: nullableText(160),
     retailerOrOfficialUrl: nullableUrlSchema,
     publishedAt: timestampSchema.nullable().optional().default(null),

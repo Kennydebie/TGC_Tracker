@@ -3,8 +3,17 @@ import test from 'node:test';
 import {
   compactDiscordMessage,
   DiscordConnector,
+  isLikelyTcgRelevant,
   type DiscordMessagePayload,
 } from '../lib/connectors/discord.ts';
+
+void test('One Piece TCG announcements are relevant without matching generic words', () => {
+  assert.equal(
+    isLikelyTcgRelevant('One Piece TCG booster restock at €109'),
+    true,
+  );
+  assert.equal(isLikelyTcgRelevant('One useful piece is available'), false);
+});
 
 const receiver = new DiscordConnector({
   guildAllowlist: ['800000000000000001'],

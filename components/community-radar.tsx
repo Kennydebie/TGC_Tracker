@@ -42,6 +42,7 @@ import type {
   CommunitySignalType,
   ScoutResearchFinding,
 } from '@/lib/community';
+import { scoutGameLabel } from '@/lib/scout-games';
 import { cn } from '@/lib/utils';
 
 const eur = new Intl.NumberFormat('nl-NL', {
@@ -289,7 +290,7 @@ export function CommunityRadar({
         externalCommunityId: communityId,
         externalChannelId: sourcePlatform === 'discord' ? channelId : null,
         enabled: true,
-        games: ['Pokémon', 'Riftbound'],
+        games: ['Pokémon', 'One Piece TCG', 'Riftbound'],
         categories: ['Deals', 'Restocks', 'Prices', 'Reprints'],
       },
       'Community source saved. Credentials and permissions are still checked server-side.',
@@ -1177,13 +1178,19 @@ function ResearchFindingGrid({
           finding.verificationEvidenceUrl ?? finding.retailerOrOfficialUrl,
         );
         return (
-          <article className="community-research-card" key={finding.id}>
+          <article
+            className="community-research-card scout-game-entry"
+            data-game={finding.game}
+            key={finding.id}
+          >
             <header>
               <div>
                 <span className="signal-platform">Scheduled research</span>
                 <h3>{finding.productName ?? 'Unknown product'}</h3>
                 <small>
-                  {finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}
+                  <span className="scout-game-tag" data-game={finding.game}>
+                    {scoutGameLabel(finding.game)}
+                  </span>
                   {finding.productLanguage
                     ? ` · ${finding.productLanguage}`
                     : ''}

@@ -8,7 +8,7 @@ import {
 } from '@/lib/repositories/community';
 import { authenticationRequired, getRequestUser } from '@/lib/server/user';
 
-const GAME_ALLOWLIST = new Set(['Pokémon', 'Riftbound']);
+const GAME_ALLOWLIST = new Set(['Pokémon', 'One Piece TCG', 'Riftbound']);
 const CATEGORY_ALLOWLIST = new Set([
   'Deals',
   'Restocks',

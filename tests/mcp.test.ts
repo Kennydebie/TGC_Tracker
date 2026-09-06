@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createScoutMcpHandler } from '../lib/mcp/handler.ts';
-import type { ScoutMcpService } from '../lib/mcp/scout-server.ts';
+import {
+  SAVE_FINDINGS_INPUT_SCHEMA,
+  type ScoutMcpService,
+} from '../lib/mcp/scout-server.ts';
 import type {
   SaveScoutFindingsInput,
   SaveScoutFindingsResult,
@@ -229,6 +232,15 @@ void test('MCP initializes and discovers exactly the two scoped OAuth tools', as
   assert.equal(tools[1].annotations.readOnlyHint, false);
   assert.ok(tools[0].outputSchema.properties.recentRuns.items.required);
   assert.ok(tools[0].outputSchema.properties.recentFindings.items.required);
+  assert.deepEqual(
+    SAVE_FINDINGS_INPUT_SCHEMA.properties.findings.items.properties.game.enum,
+    ['pokemon', 'one_piece', 'riftbound'],
+  );
+  assert.match(
+    SAVE_FINDINGS_INPUT_SCHEMA.properties.findings.items.properties
+      .sourceIdentifier.description,
+    /copied exactly/i,
+  );
 });
 
 void test('MCP calls inject the authenticated account and return structured results', async () => {
