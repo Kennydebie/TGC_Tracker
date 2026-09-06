@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex */
+
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -12,7 +14,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { Badge } from '@/components/ui/badge';
@@ -23,18 +25,23 @@ import type {
 } from '@/lib/community';
 import { money } from '@/lib/domain';
 import {
-  buildScoutActionTimeline,
   checkedScoutActionUrl,
   isScoutDateOnly,
   rankScoutFindings,
   type ScoutAttentionLevel,
   type ScoutFindingAssessment,
 } from '@/lib/scout-priority';
+import {
+  buildScoutRoadmap,
+  type ScoutRoadmapMilestone,
+} from '@/lib/scout-roadmap';
 import { cn } from '@/lib/utils';
 
 type ScoutBoardResponse = {
   data: {
     findings: ScoutResearchFinding[];
+    roadmapFindings: ScoutResearchFinding[];
+    roadmapCoverageLimited: boolean;
     importStatus: ScoutResearchImportStatus;
   };
 };
@@ -168,22 +175,176 @@ function visibleActionLabel(assessment: ScoutFindingAssessment) {
   return 'Do next';
 }
 
+function roadmapMonthLabel(year: number, monthIndex: number) {
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    timeZone: 'Europe/Amsterdam',
+  }).format(new Date(Date.UTC(year, monthIndex, 1, 12)));
+}
+
+function roadmapRangeLabel(startMonthKey: string, endMonthKey: string) {
+  const label = (value: string) => {
+    const [year, month] = value.split('-').map(Number);
+    return `${roadmapMonthLabel(year, month - 1)} ${year}`;
+  };
+  return `${label(startMonthKey)} — ${label(endMonthKey)}`;
+}
+
+function roadmapMilestoneTime(milestone: ScoutRoadmapMilestone) {
+  if (milestone.precision === 'date') return 'Time not published';
+  return new Intl.DateTimeFormat('nl-NL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Amsterdam',
+  }).format(new Date(milestone.at));
+}
+
+function roadmapMilestoneDateLabel(milestone: ScoutRoadmapMilestone) {
+  const [year, month, day] = milestone.dateKey.split('-').map(Number);
+  const fullDate = new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'long',
+    timeZone: 'Europe/Amsterdam',
+  }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+  return milestone.precision === 'date'
+    ? `${fullDate}, time not published`
+    : `${fullDate} at ${roadmapMilestoneTime(milestone)} Europe/Amsterdam`;
+}
+
+function roadmapMilestonePercent(
+  milestone: ScoutRoadmapMilestone,
+  year: number,
+  monthIndex: number,
+) {
+  const day = Number(milestone.dateKey.slice(8, 10));
+  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return Math.min(98, Math.max(2, ((day - 0.5) / daysInMonth) * 100));
+}
+
+function roadmapStatus(milestone: ScoutRoadmapMilestone) {
+  if (milestone.temporalState === 'cancelled') return 'Cancelled';
+  if (milestone.temporalState === 'closed') return 'Closed';
+  if (milestone.temporalState === 'past') return 'Past';
+  const currentStatus =
+    milestone.provenance === 'reported'
+      ? 'Reported · verify'
+      : milestone.provenance === 'checked_stale'
+        ? 'Reverify'
+        : milestone.isPrimary
+          ? milestone.kind === 'event' &&
+            milestone.assessment.actionState === 'closed'
+            ? 'Scheduled'
+            : milestone.assessment.label
+          : 'Scheduled';
+  return milestone.temporalState === 'today'
+    ? `Today · ${currentStatus}`
+    : currentStatus;
+}
+
+function roadmapMilestoneGroups(milestones: ScoutRoadmapMilestone[]) {
+  const featuredIds = new Set(
+    milestones
+      .filter((milestone) => ['critical', 'high'].includes(milestone.attention))
+      .map((milestone) => milestone.id),
+  );
+  for (const milestone of milestones) {
+    if (featuredIds.size >= 4) break;
+    featuredIds.add(milestone.id);
+  }
+  return {
+    visible: milestones.filter((milestone) => featuredIds.has(milestone.id)),
+    hidden: milestones.filter((milestone) => !featuredIds.has(milestone.id)),
+  };
+}
+
+function RoadmapMilestoneCard({
+  milestone,
+}: {
+  milestone: ScoutRoadmapMilestone;
+}) {
+  const description = milestone.finding.actionInstruction
+    ? visibleActionInstruction(milestone.finding, milestone.assessment)
+    : milestone.finding.summary;
+  return (
+    <li
+      className={cn(
+        'scout-roadmap-milestone',
+        `attention-${milestone.attention}`,
+        `temporal-${milestone.temporalState}`,
+        `provenance-${milestone.provenance}`,
+        milestone.precision === 'date' && 'precision-date',
+      )}
+    >
+      <div className="scout-roadmap-date">
+        <time
+          dateTime={milestone.at}
+          aria-label={roadmapMilestoneDateLabel(milestone)}
+        >
+          <strong>{Number(milestone.dateKey.slice(8, 10))}</strong>
+          <span>{roadmapMilestoneTime(milestone)}</span>
+        </time>
+        <span>{timelineLabel(milestone.kind, milestone.assessment)}</span>
+      </div>
+      <div className="scout-roadmap-copy">
+        <div className="scout-roadmap-meta">
+          <span>
+            {milestone.finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}
+          </span>
+          <strong>{roadmapStatus(milestone)}</strong>
+        </div>
+        <h4>{findingTitle(milestone.finding)}</h4>
+        <small>{sourceLabel(milestone.finding)}</small>
+        <p>{description}</p>
+      </div>
+    </li>
+  );
+}
+
 export function ScoutBoardIntelligence({
   initialFindings,
+  initialRoadmapFindings,
+  initialRoadmapCoverageLimited,
   initialImportStatus,
   signInPath,
   userSignedIn,
 }: {
   initialFindings: ScoutResearchFinding[];
+  initialRoadmapFindings: ScoutResearchFinding[];
+  initialRoadmapCoverageLimited: boolean;
   initialImportStatus: ScoutResearchImportStatus;
   signInPath: string;
   userSignedIn: boolean;
 }) {
   const [findings, setFindings] = useState(initialFindings);
+  const [roadmapFindings, setRoadmapFindings] = useState(
+    initialRoadmapFindings,
+  );
+  const [roadmapCoverageLimited, setRoadmapCoverageLimited] = useState(
+    initialRoadmapCoverageLimited,
+  );
   const [importStatus, setImportStatus] = useState(initialImportStatus);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
+  const roadmapScrollRef = useRef<HTMLElement>(null);
+  const currentMonthRef = useRef<HTMLLIElement>(null);
+  const roadmapPositionedRef = useRef(false);
+
+  const scrollRoadmapToCurrent = useCallback(
+    (behavior: ScrollBehavior = 'smooth') => {
+      const scrollRegion = roadmapScrollRef.current;
+      const currentMonth = currentMonthRef.current;
+      if (!scrollRegion || !currentMonth) return;
+      scrollRegion.scrollTo({
+        behavior,
+        left: Math.max(
+          0,
+          currentMonth.offsetLeft -
+            (scrollRegion.clientWidth - currentMonth.clientWidth) / 2,
+        ),
+      });
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     if (!userSignedIn) return;
@@ -196,6 +357,10 @@ export function ScoutBoardIntelligence({
       if (!response.ok) throw new Error('Scout Board could not be refreshed.');
       const payload = (await response.json()) as ScoutBoardResponse;
       setFindings(payload.data.findings);
+      setRoadmapFindings(
+        payload.data.roadmapFindings ?? payload.data.findings ?? [],
+      );
+      setRoadmapCoverageLimited(Boolean(payload.data.roadmapCoverageLimited));
       setImportStatus(payload.data.importStatus);
       setClock(Date.now());
       setError(null);
@@ -227,10 +392,18 @@ export function ScoutBoardIntelligence({
     () => rankScoutFindings(findings, clock),
     [clock, findings],
   );
-  const timeline = useMemo(
-    () => buildScoutActionTimeline(findings, clock).slice(0, 6),
-    [clock, findings],
+  const roadmap = useMemo(
+    () => buildScoutRoadmap(roadmapFindings, clock),
+    [clock, roadmapFindings],
   );
+  useEffect(() => {
+    if (!userSignedIn || roadmapPositionedRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollRoadmapToCurrent('auto');
+      roadmapPositionedRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [roadmap.startMonthKey, scrollRoadmapToCurrent, userSignedIn]);
   const activePriorities = ranked.filter(
     ({ assessment }) => assessment.level !== 'expired',
   );
@@ -250,16 +423,20 @@ export function ScoutBoardIntelligence({
     : 'Waiting for first run';
 
   return (
-    <section className="scout-intelligence" aria-labelledby="scout-now-heading">
+    <section
+      className="scout-intelligence"
+      aria-labelledby="scout-board-heading"
+    >
       <header className="scout-intelligence-header">
         <div>
           <span className="panel-kicker">
             <Route aria-hidden="true" /> SCHEDULED MARKET INTELLIGENCE
           </span>
-          <h2 id="scout-now-heading">What matters now</h2>
+          <h2 id="scout-board-heading">Market roadmap</h2>
           <p>
-            Verified deadlines and material changes rise first. Asking prices
-            and hype never become profit by themselves.
+            See every sourced opening, deadline and release month by month.
+            Priority below still separates verified action from asking prices
+            and hype.
           </p>
         </div>
         <div className="scout-run-heartbeat" aria-live="polite">
@@ -337,60 +514,175 @@ export function ScoutBoardIntelligence({
 
       {userSignedIn ? (
         <>
-          <div className="action-horizon">
+          <section
+            className="scout-roadmap-section"
+            aria-labelledby="scout-roadmap-heading"
+          >
             <div className="scout-board-section-heading">
               <div>
-                <span>Action horizon</span>
-                <h3>Releases, registrations and deadlines</h3>
+                <span>Release &amp; action roadmap</span>
+                <h3 id="scout-roadmap-heading">
+                  {roadmapRangeLabel(
+                    roadmap.startMonthKey,
+                    roadmap.endMonthKey,
+                  )}
+                </h3>
               </div>
-              <Badge variant="outline">Europe/Amsterdam</Badge>
-            </div>
-            {timeline.length > 0 ? (
-              <ol className="scout-action-timeline">
-                {timeline.map(({ finding, assessment }) => (
-                  <li
-                    className={cn(
-                      'scout-timeline-item',
-                      `attention-${assessment.level}`,
-                    )}
-                    key={finding.id}
+              <div className="scout-roadmap-heading-meta">
+                <div className="scout-roadmap-jumps">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      roadmapScrollRef.current?.scrollTo({
+                        behavior: 'smooth',
+                        left: 0,
+                      })
+                    }
                   >
-                    <div className="scout-timeline-date">
-                      <span>
-                        {timelineLabel(assessment.nextRelevantKind, assessment)}
-                      </span>
-                      <time dateTime={assessment.nextRelevantAt ?? undefined}>
-                        {assessment.nextRelevantAt
-                          ? milestoneDate(assessment.nextRelevantAt)
-                          : 'Date unknown'}
-                      </time>
-                    </div>
-                    <div>
-                      <strong>{findingTitle(finding)}</strong>
-                      <p>{visibleActionInstruction(finding, assessment)}</p>
-                    </div>
-                    <Badge variant="outline">{assessment.label}</Badge>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="scout-board-empty">
-                <CalendarClock aria-hidden="true" />
-                <div>
-                  <h3>No sourced dates have been imported yet</h3>
-                  <p>
-                    The next scheduled run can add exact release dates, signup
-                    windows and deadlines. Unknown dates stay unknown.
-                  </p>
+                    Back to July
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollRoadmapToCurrent()}
+                  >
+                    Jump to today
+                  </button>
                 </div>
+                <Badge variant="outline">Europe/Amsterdam</Badge>
               </div>
-            )}
-          </div>
+            </div>
+            {roadmapCoverageLimited || roadmap.rangeLimited ? (
+              <output className="scout-roadmap-coverage" aria-live="polite">
+                <AlertTriangle aria-hidden="true" />
+                The roadmap is showing the loaded date range, not a complete
+                archive. New scheduled imports remain visible when received.
+              </output>
+            ) : null}
+            {/* A labelled overflow region must be focusable so keyboard users
+                can pan the month axis with arrow keys. */}
+            <section
+              className="scout-roadmap-scroll"
+              ref={roadmapScrollRef}
+              aria-label={`Market roadmap from ${roadmapRangeLabel(
+                roadmap.startMonthKey,
+                roadmap.endMonthKey,
+              )}`}
+              tabIndex={0}
+            >
+              <ol className="scout-roadmap">
+                {roadmap.months.map((month) => {
+                  const milestoneGroups = roadmapMilestoneGroups(
+                    month.milestones,
+                  );
+                  return (
+                    <li
+                      className={cn(
+                        'scout-roadmap-month',
+                        month.isCurrent && 'is-current',
+                        month.milestones.length === 0 && 'is-empty',
+                      )}
+                      key={month.key}
+                      ref={month.isCurrent ? currentMonthRef : undefined}
+                    >
+                      <header>
+                        <time
+                          dateTime={`${month.key}-01`}
+                          aria-current={month.isCurrent ? 'date' : undefined}
+                        >
+                          <strong>
+                            {roadmapMonthLabel(month.year, month.monthIndex)}
+                          </strong>
+                          <span>{month.year}</span>
+                        </time>
+                        <small>
+                          {month.milestones.length === 1
+                            ? '1 dated item'
+                            : `${month.milestones.length} dated items`}
+                        </small>
+                      </header>
+                      <div className="scout-roadmap-axis" aria-hidden="true">
+                        <i />
+                        {month.milestones.map((milestone) => (
+                          <b
+                            className={cn(
+                              'scout-roadmap-axis-marker',
+                              `marker-${milestone.attention}`,
+                              milestone.precision === 'date' && 'is-date-only',
+                              ['past', 'closed', 'cancelled'].includes(
+                                milestone.temporalState,
+                              ) && 'is-past',
+                            )}
+                            key={milestone.id}
+                            style={{
+                              left: `${roadmapMilestonePercent(
+                                milestone,
+                                month.year,
+                                month.monthIndex,
+                              )}%`,
+                            }}
+                          />
+                        ))}
+                        {month.todayPercent !== null ? (
+                          <span style={{ left: `${month.todayPercent}%` }}>
+                            Today
+                          </span>
+                        ) : null}
+                      </div>
+                      {month.milestones.length > 0 ? (
+                        <>
+                          <ol className="scout-roadmap-milestones">
+                            {milestoneGroups.visible.map((milestone) => (
+                              <RoadmapMilestoneCard
+                                key={milestone.id}
+                                milestone={milestone}
+                              />
+                            ))}
+                          </ol>
+                          {milestoneGroups.hidden.length > 0 ? (
+                            <details className="scout-roadmap-more">
+                              <summary>
+                                Show {milestoneGroups.hidden.length} more dated
+                                items
+                              </summary>
+                              <ol className="scout-roadmap-milestones">
+                                {milestoneGroups.hidden.map((milestone) => (
+                                  <RoadmapMilestoneCard
+                                    key={milestone.id}
+                                    milestone={milestone}
+                                  />
+                                ))}
+                              </ol>
+                            </details>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="scout-roadmap-empty-month">
+                          <CalendarClock aria-hidden="true" />
+                          <span>
+                            {roadmapCoverageLimited
+                              ? 'No loaded dates'
+                              : 'No sourced dates'}
+                          </span>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+            {roadmap.totalMilestones === 0 ? (
+              <p className="scout-roadmap-waiting">
+                The month structure is ready. Exact dates will appear here as
+                soon as the scheduled research imports them; unknown dates stay
+                unknown.
+              </p>
+            ) : null}
+          </section>
 
           <div className="priority-intelligence">
             <div className="scout-board-section-heading">
               <div>
-                <span>Priority intelligence</span>
+                <span>What matters now</span>
                 <h3>{urgentCount} verified items need closer attention</h3>
               </div>
               <small>

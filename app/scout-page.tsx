@@ -46,13 +46,20 @@ export async function ScoutPage({
         displayName: user.displayName,
       }).catch(() => ({
         findings: [],
+        roadmapFindings: [],
+        roadmapCoverageLimited: false,
         importStatus: {
           ...emptyImportStatus,
           actionableError:
             'Scout Board storage is temporarily unavailable. Confirm the latest database migration and refresh.',
         },
       }))
-    : { findings: [], importStatus: emptyImportStatus };
+    : {
+        findings: [],
+        roadmapFindings: [],
+        roadmapCoverageLimited: false,
+        importStatus: emptyImportStatus,
+      };
   const basePath = section === 'dashboard' ? '/' : `/${section}`;
   const query = new URLSearchParams(initialSearchParams).toString();
   const path = query ? `${basePath}?${query}` : basePath;
@@ -62,6 +69,8 @@ export async function ScoutPage({
       initialDealId={dealId}
       initialDeals={initialDeals}
       initialResearchFindings={initialResearch.findings}
+      initialRoadmapFindings={initialResearch.roadmapFindings}
+      initialRoadmapCoverageLimited={initialResearch.roadmapCoverageLimited}
       initialResearchImportStatus={initialResearch.importStatus}
       initialSearchParams={initialSearchParams}
       user={user ? { displayName: user.displayName, email: user.email } : null}

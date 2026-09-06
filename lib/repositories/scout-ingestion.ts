@@ -1,5 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 
+import type { ScoutResearchFinding } from '../community.ts';
 import type { RequestUser } from '../server/user.ts';
 import {
   deriveScoutRunStatus,
@@ -43,6 +44,49 @@ type PreparedFinding = {
 
 type PreparedStatement = ReturnType<D1Database['prepare']>;
 
+type ScoutDashboardRow = {
+  id: string;
+  source_kind: ScoutFindingInput['sourceKind'];
+  source_identifier: string;
+  game: 'pokemon' | 'riftbound';
+  headline: string | null;
+  product_name: string | null;
+  product_language: string | null;
+  update_type: ScoutFindingInput['updateType'];
+  summary: string;
+  source_url: string | null;
+  subreddit: string | null;
+  source_post_or_comment_id: string | null;
+  retailer_name: string | null;
+  retailer_or_official_url: string | null;
+  published_at: number | null;
+  event_at: string | null;
+  action_opens_at: string | null;
+  action_deadline_at: string | null;
+  action_type: ScoutFindingInput['actionType'];
+  action_instruction: string | null;
+  action_url: string | null;
+  lifecycle_status: ScoutFindingInput['lifecycleStatus'];
+  last_observed_at: number;
+  material_changed_at: number;
+  price_cents: number | null;
+  currency: 'EUR' | 'GBP' | 'USD' | null;
+  region: string | null;
+  shipping_to_netherlands: 'confirmed' | 'unavailable' | 'unknown';
+  availability: 'in_stock' | 'preorder' | 'sold_out' | 'unknown';
+  verification_status:
+    | 'community_report'
+    | 'retailer_checked'
+    | 'official_checked';
+  verification_evidence_url: string | null;
+  verification_observed_at: number | null;
+  collection_method: typeof SCOUT_COLLECTION_METHOD;
+};
+
+type ScoutRoadmapRow = ScoutDashboardRow & {
+  roadmap_total: number;
+};
+
 const SCOUT_RUN_LEASE_MS = 5 * 60_000;
 
 function changed(result: D1Result<unknown>): boolean {
@@ -62,6 +106,44 @@ function iso(value: number | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
+function mapScoutDashboardRow(row: ScoutDashboardRow): ScoutResearchFinding {
+  return {
+    id: row.id,
+    sourceKind: row.source_kind,
+    sourceIdentifier: row.source_identifier,
+    game: row.game,
+    headline: row.headline,
+    productName: row.product_name,
+    productLanguage: row.product_language,
+    updateType: row.update_type,
+    summary: row.summary,
+    sourceUrl: row.source_url,
+    subreddit: row.subreddit,
+    sourceExternalId: row.source_post_or_comment_id,
+    retailerName: row.retailer_name,
+    retailerOrOfficialUrl: row.retailer_or_official_url,
+    publishedAt: iso(row.published_at),
+    observedAt: new Date(row.last_observed_at).toISOString(),
+    materialChangedAt: new Date(row.material_changed_at).toISOString(),
+    eventAt: row.event_at,
+    actionOpensAt: row.action_opens_at,
+    actionDeadlineAt: row.action_deadline_at,
+    actionType: row.action_type,
+    actionInstruction: row.action_instruction,
+    actionUrl: row.action_url,
+    lifecycleStatus: row.lifecycle_status,
+    price: row.price_cents === null ? null : row.price_cents / 100,
+    currency: row.currency,
+    region: row.region,
+    shippingToNetherlands: row.shipping_to_netherlands,
+    availability: row.availability,
+    verificationStatus: row.verification_status,
+    verificationEvidenceUrl: row.verification_evidence_url,
+    verificationObservedAt: iso(row.verification_observed_at),
+    collectionMethod: row.collection_method,
+  };
+}
+
 function amsterdamDateKey(now = Date.now()): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
@@ -75,6 +157,39 @@ function amsterdamDateKey(now = Date.now()): string {
       .map((part) => [part.type, part.value]),
   );
   return `${value.year}-${value.month}-${value.day}`;
+}
+
+function amsterdamLocalMidnightEpoch(
+  year: number,
+  monthIndex: number,
+  day: number,
+): number {
+  const utcGuess = Date.UTC(year, monthIndex, day);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'Europe/Amsterdam',
+  }).formatToParts(new Date(utcGuess));
+  const value = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  const zoneOffsetAtGuess =
+    Date.UTC(
+      value.year,
+      value.month - 1,
+      value.day,
+      value.hour,
+      value.minute,
+      value.second,
+    ) - utcGuess;
+  return utcGuess - zoneOffsetAtGuess;
 }
 
 function milestoneSortAt(value: string | null): number | null {
@@ -863,6 +978,18 @@ export async function listScoutResearchDashboard(
     recentFindingLimit: 50,
   });
   const milestoneDateFloor = amsterdamDateKey(now);
+  const currentAmsterdamYear = Number(milestoneDateFloor.slice(0, 4));
+  const currentAmsterdamMonth = Number(milestoneDateFloor.slice(5, 7));
+  const roadmapAnchorYear =
+    currentAmsterdamMonth >= 7
+      ? currentAmsterdamYear
+      : currentAmsterdamYear - 1;
+  const roadmapDateFloor = `${roadmapAnchorYear}-07-01`;
+  const roadmapEpochFloor = amsterdamLocalMidnightEpoch(
+    roadmapAnchorYear,
+    6,
+    1,
+  );
   const rows = await db
     .prepare(
       `WITH recent AS (
@@ -940,80 +1067,98 @@ export async function listScoutResearchDashboard(
       user.id,
       user.id,
     )
-    .all<{
-      id: string;
-      source_kind: ScoutFindingInput['sourceKind'];
-      source_identifier: string;
-      game: 'pokemon' | 'riftbound';
-      headline: string | null;
-      product_name: string | null;
-      product_language: string | null;
-      update_type: ScoutFindingInput['updateType'];
-      summary: string;
-      source_url: string | null;
-      subreddit: string | null;
-      source_post_or_comment_id: string | null;
-      retailer_name: string | null;
-      retailer_or_official_url: string | null;
-      published_at: number | null;
-      event_at: string | null;
-      action_opens_at: string | null;
-      action_deadline_at: string | null;
-      action_type: ScoutFindingInput['actionType'];
-      action_instruction: string | null;
-      action_url: string | null;
-      lifecycle_status: ScoutFindingInput['lifecycleStatus'];
-      last_observed_at: number;
-      material_changed_at: number;
-      price_cents: number | null;
-      currency: 'EUR' | 'GBP' | 'USD' | null;
-      region: string | null;
-      shipping_to_netherlands: 'confirmed' | 'unavailable' | 'unknown';
-      availability: 'in_stock' | 'preorder' | 'sold_out' | 'unknown';
-      verification_status:
-        | 'community_report'
-        | 'retailer_checked'
-        | 'official_checked';
-      verification_evidence_url: string | null;
-      verification_observed_at: number | null;
-      collection_method: typeof SCOUT_COLLECTION_METHOD;
-    }>();
+    .all<ScoutDashboardRow>();
+  const roadmapRows = await db
+    .prepare(
+      `WITH roadmap_milestones AS (
+         SELECT id, event_sort_at AS milestone
+         FROM scout_findings
+         WHERE user_id = ? AND data_mode = 'production'
+           AND ((length(event_at) = 10 AND event_at >= ?)
+             OR (length(event_at) > 10 AND event_sort_at >= ?))
+         UNION ALL
+         SELECT id, action_opens_sort_at AS milestone
+         FROM scout_findings
+         WHERE user_id = ? AND data_mode = 'production'
+           AND ((length(action_opens_at) = 10 AND action_opens_at >= ?)
+             OR (length(action_opens_at) > 10 AND action_opens_sort_at >= ?))
+         UNION ALL
+         SELECT id, action_deadline_sort_at AS milestone
+         FROM scout_findings
+         WHERE user_id = ? AND data_mode = 'production'
+           AND ((length(action_deadline_at) = 10 AND action_deadline_at >= ?)
+             OR (length(action_deadline_at) > 10 AND action_deadline_sort_at >= ?))
+       ), roadmap_ids AS (
+         SELECT id, MIN(milestone) AS first_milestone,
+                MAX(milestone) AS last_milestone
+         FROM roadmap_milestones
+         GROUP BY id
+       ), earliest_ids AS (
+         SELECT id, first_milestone, last_milestone
+         FROM roadmap_ids
+         ORDER BY first_milestone ASC, id ASC
+         LIMIT 1000
+       ), latest_non_cancelled_id AS (
+         SELECT roadmap_ids.id, roadmap_ids.first_milestone,
+                roadmap_ids.last_milestone
+         FROM roadmap_ids
+         INNER JOIN scout_findings AS latest_finding
+           ON latest_finding.id = roadmap_ids.id
+         WHERE latest_finding.user_id = ?
+           AND latest_finding.data_mode = 'production'
+           AND latest_finding.lifecycle_status <> 'cancelled'
+         ORDER BY roadmap_ids.last_milestone DESC, roadmap_ids.id DESC
+         LIMIT 1
+       ), selected_ids AS (
+         SELECT id, first_milestone, last_milestone FROM earliest_ids
+         UNION
+         SELECT id, first_milestone, last_milestone
+         FROM latest_non_cancelled_id
+       )
+       SELECT finding.id, finding.source_kind, finding.source_identifier,
+              finding.game, finding.headline, finding.product_name,
+              finding.product_language, finding.update_type, finding.summary,
+              finding.source_url, finding.subreddit,
+              finding.source_post_or_comment_id, finding.retailer_name,
+              finding.retailer_or_official_url, finding.published_at,
+              finding.event_at, finding.action_opens_at,
+              finding.action_deadline_at, finding.action_type,
+              finding.action_instruction, finding.action_url,
+              finding.lifecycle_status, finding.last_observed_at,
+              COALESCE(finding.material_changed_at, finding.first_observed_at)
+                AS material_changed_at,
+              finding.price_cents, finding.currency, finding.region,
+              finding.shipping_to_netherlands, finding.availability,
+              finding.verification_status,
+              finding.verification_evidence_url,
+              finding.verification_observed_at, finding.collection_method,
+              (SELECT COUNT(*) FROM roadmap_ids) AS roadmap_total
+       FROM scout_findings AS finding
+       INNER JOIN selected_ids ON selected_ids.id = finding.id
+       WHERE finding.user_id = ? AND finding.data_mode = 'production'
+       ORDER BY selected_ids.first_milestone ASC, finding.id ASC`,
+    )
+    .bind(
+      user.id,
+      roadmapDateFloor,
+      roadmapEpochFloor,
+      user.id,
+      roadmapDateFloor,
+      roadmapEpochFloor,
+      user.id,
+      roadmapDateFloor,
+      roadmapEpochFloor,
+      user.id,
+      user.id,
+    )
+    .all<ScoutRoadmapRow>();
+  const allRoadmapRows = roadmapRows.results ?? [];
+  const roadmapTotal = Number(allRoadmapRows[0]?.roadmap_total ?? 0);
+  const roadmapCoverageLimited = roadmapTotal > allRoadmapRows.length;
   return {
-    findings: (rows.results ?? []).map((row) => ({
-      id: row.id,
-      sourceKind: row.source_kind,
-      sourceIdentifier: row.source_identifier,
-      game: row.game,
-      headline: row.headline,
-      productName: row.product_name,
-      productLanguage: row.product_language,
-      updateType: row.update_type,
-      summary: row.summary,
-      sourceUrl: row.source_url,
-      subreddit: row.subreddit,
-      sourceExternalId: row.source_post_or_comment_id,
-      retailerName: row.retailer_name,
-      retailerOrOfficialUrl: row.retailer_or_official_url,
-      publishedAt: iso(row.published_at),
-      observedAt: new Date(row.last_observed_at).toISOString(),
-      materialChangedAt: new Date(row.material_changed_at).toISOString(),
-      eventAt: row.event_at,
-      actionOpensAt: row.action_opens_at,
-      actionDeadlineAt: row.action_deadline_at,
-      actionType: row.action_type,
-      actionInstruction: row.action_instruction,
-      actionUrl: row.action_url,
-      lifecycleStatus: row.lifecycle_status,
-      price: row.price_cents === null ? null : row.price_cents / 100,
-      currency: row.currency,
-      region: row.region,
-      shippingToNetherlands: row.shipping_to_netherlands,
-      availability: row.availability,
-      verificationStatus: row.verification_status,
-      verificationEvidenceUrl: row.verification_evidence_url,
-      verificationObservedAt: iso(row.verification_observed_at),
-      collectionMethod: row.collection_method,
-    })),
+    findings: (rows.results ?? []).map(mapScoutDashboardRow),
+    roadmapFindings: allRoadmapRows.map(mapScoutDashboardRow),
+    roadmapCoverageLimited,
     importStatus: {
       lastSuccessfulImportAt: state.lastSuccessfulImportAt,
       lastAttemptAt: state.lastAttemptAt,

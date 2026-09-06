@@ -157,6 +157,8 @@ type ScoutAppProps = {
   initialSearchParams?: Record<string, string>;
   initialDeals?: Deal[];
   initialResearchFindings?: ScoutResearchFinding[];
+  initialRoadmapFindings?: ScoutResearchFinding[];
+  initialRoadmapCoverageLimited?: boolean;
   initialResearchImportStatus?: ScoutResearchImportStatus;
   user?: { displayName: string; email: string } | null;
   signInPath?: string;
@@ -448,6 +450,8 @@ export function ScoutApp({
   initialSearchParams = {},
   initialDeals = [],
   initialResearchFindings = [],
+  initialRoadmapFindings = [],
+  initialRoadmapCoverageLimited = false,
   initialResearchImportStatus = {
     lastSuccessfulImportAt: null,
     lastAttemptAt: null,
@@ -971,6 +975,8 @@ export function ScoutApp({
             <Dashboard
               deals={dealRecords}
               initialResearchFindings={initialResearchFindings}
+              initialRoadmapFindings={initialRoadmapFindings}
+              initialRoadmapCoverageLimited={initialRoadmapCoverageLimited}
               initialResearchImportStatus={initialResearchImportStatus}
               onInspect={setSelectedDeal}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
@@ -1336,6 +1342,8 @@ function ScoreMedallion({
 function Dashboard({
   deals: records,
   initialResearchFindings,
+  initialRoadmapFindings,
+  initialRoadmapCoverageLimited,
   initialResearchImportStatus,
   onInspect,
   onOpenListing,
@@ -1348,6 +1356,8 @@ function Dashboard({
 }: {
   deals: Deal[];
   initialResearchFindings: ScoutResearchFinding[];
+  initialRoadmapFindings: ScoutResearchFinding[];
+  initialRoadmapCoverageLimited: boolean;
   initialResearchImportStatus: ScoutResearchImportStatus;
   onInspect: (deal: Deal) => void;
   onOpenListing: (deal: Deal) => void;
@@ -1384,6 +1394,8 @@ function Dashboard({
     <div className="page-stack">
       <ScoutBoardIntelligence
         initialFindings={initialResearchFindings}
+        initialRoadmapFindings={initialRoadmapFindings}
+        initialRoadmapCoverageLimited={initialRoadmapCoverageLimited}
         initialImportStatus={initialResearchImportStatus}
         signInPath={signInPath}
         userSignedIn={userSignedIn}

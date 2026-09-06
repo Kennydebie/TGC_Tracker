@@ -343,6 +343,10 @@ void test('all reads and uniqueness constraints are isolated to the authenticate
   const db = asD1(sqlite);
   try {
     const shared = payload('run:shared');
+    shared.findings[0] = {
+      ...shared.findings[0],
+      eventAt: '2026-10-01',
+    };
     await saveScoutFindings(db, userA, shared, after(shared.run.finishedAt));
     await saveScoutFindings(
       db,
@@ -359,6 +363,23 @@ void test('all reads and uniqueness constraints are isolated to the authenticate
     assert.equal(stateA.recentFindings.length, 1);
     assert.equal(stateB.recentFindings.length, 1);
     assert.notEqual(stateA.recentFindings[0].id, stateB.recentFindings[0].id);
+
+    const dashboardA = await listScoutResearchDashboard(
+      db,
+      userA,
+      Date.parse('2026-09-06T12:00:00Z'),
+    );
+    const dashboardB = await listScoutResearchDashboard(
+      db,
+      userB,
+      Date.parse('2026-09-06T12:00:00Z'),
+    );
+    assert.equal(dashboardA.roadmapFindings.length, 1);
+    assert.equal(dashboardB.roadmapFindings.length, 1);
+    assert.notEqual(
+      dashboardA.roadmapFindings[0].id,
+      dashboardB.roadmapFindings[0].id,
+    );
 
     const usersBeforeRead = count(sqlite, 'users');
     const newUserState = await getScoutIngestionState(db, {
@@ -494,6 +515,112 @@ void test('older future milestones survive the recent-finding display limit', as
     );
     assert.equal(persistedMilestone?.eventAt, '2026-09-06T22:45:00Z');
     assert.ok(dashboard.findings.length > 50);
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('July roadmap history survives newer undated dashboard findings', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  try {
+    const julyMilestone = payload('run:july-roadmap-history', {
+      observedAt: '2026-07-02T08:00:00Z',
+      price: null,
+    });
+    julyMilestone.findings[0] = {
+      ...julyMilestone.findings[0],
+      headline: 'TEST RECORD: July roadmap milestone',
+      eventAt: '2026-07-15',
+      sourcePostOrCommentId: 'comment:july-roadmap-history',
+      sourceUrl:
+        'https://www.reddit.com/r/PokemonTCGNL/comments/test/comment/july-roadmap-history',
+    };
+    await saveScoutFindings(
+      db,
+      userA,
+      julyMilestone,
+      after(julyMilestone.run.finishedAt),
+    );
+
+    for (let batch = 0; batch < 3; batch += 1) {
+      const observedAt = new Date(
+        Date.parse('2026-09-05T20:10:00Z') + batch * 60_000,
+      ).toISOString();
+      const recent = payload(`run:undated-recent-${batch}`, {
+        observedAt,
+        price: null,
+      });
+      const template = recent.findings[0];
+      recent.findings = Array.from({ length: 20 }, (_, index) => ({
+        ...template,
+        headline: `TEST RECORD: undated recent finding ${batch}-${index}`,
+        productName: `TEST RECORD: undated product ${batch}-${index}`,
+        sourcePostOrCommentId: `comment:undated-${batch}-${index}`,
+        sourceUrl: `https://www.reddit.com/r/PokemonTCGNL/comments/test/comment/undated-${batch}-${index}`,
+      }));
+      await saveScoutFindings(db, userA, recent, after(recent.run.finishedAt));
+    }
+
+    const dashboard = await listScoutResearchDashboard(
+      db,
+      userA,
+      Date.parse('2026-09-06T12:00:00Z'),
+    );
+    assert.equal(
+      dashboard.findings.some(
+        (finding) => finding.headline === 'TEST RECORD: July roadmap milestone',
+      ),
+      false,
+    );
+    assert.equal(
+      dashboard.roadmapFindings.find(
+        (finding) => finding.headline === 'TEST RECORD: July roadmap milestone',
+      )?.eventAt,
+      '2026-07-15',
+    );
+    assert.equal(dashboard.roadmapCoverageLimited, false);
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('January roadmap query includes the prior July Amsterdam boundary', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  try {
+    const boundary = payload('run:amsterdam-july-boundary', {
+      observedAt: '2026-07-02T08:00:00Z',
+      price: null,
+    });
+    boundary.findings[0] = {
+      ...boundary.findings[0],
+      headline: 'TEST RECORD: Amsterdam July boundary',
+      eventAt: '2026-06-30T22:30:00Z',
+      sourcePostOrCommentId: 'comment:amsterdam-july-boundary',
+      sourceUrl:
+        'https://www.reddit.com/r/PokemonTCGNL/comments/test/comment/amsterdam-july-boundary',
+    };
+    await saveScoutFindings(
+      db,
+      userA,
+      boundary,
+      after(boundary.run.finishedAt),
+    );
+
+    const dashboard = await listScoutResearchDashboard(
+      db,
+      userA,
+      Date.parse('2027-01-12T12:00:00Z'),
+    );
+    assert.equal(dashboard.roadmapFindings.length, 1);
+    assert.equal(
+      dashboard.roadmapFindings[0].headline,
+      'TEST RECORD: Amsterdam July boundary',
+    );
+    assert.equal(dashboard.roadmapFindings[0].eventAt, '2026-06-30T22:30:00Z');
   } finally {
     sqlite.close();
   }

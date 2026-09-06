@@ -17,7 +17,12 @@ export async function GET(request: Request) {
   const user = getRequestUser(request);
   const data = user
     ? await listScoutResearchDashboard(getD1(), user)
-    : { findings: [], importStatus: emptyImportStatus };
+    : {
+        findings: [],
+        roadmapFindings: [],
+        roadmapCoverageLimited: false,
+        importStatus: emptyImportStatus,
+      };
   return Response.json(
     { data },
     { headers: { 'cache-control': 'private, no-store' } },
