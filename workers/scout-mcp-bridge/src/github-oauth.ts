@@ -4,12 +4,13 @@ import {
   DOWNSTREAM_TIMEOUT_MS,
   GITHUB_CALLBACK_URL,
   GITHUB_MAX_BODY_BYTES,
+  GITHUB_ORIGIN,
 } from './constants';
 import type { BridgeEnv } from './env';
 import { readBoundedJson, SafeHttpError } from './http';
 import type { FetchImplementation } from './downstream';
 
-const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
+const GITHUB_AUTHORIZE_URL = `${GITHUB_ORIGIN}/login/oauth/authorize`;
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 

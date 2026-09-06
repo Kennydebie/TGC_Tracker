@@ -5,6 +5,7 @@ export const BRIDGE_HOSTNAME =
 export const MCP_PATH = '/mcp' as const;
 export const MCP_RESOURCE = `${BRIDGE_ORIGIN}${MCP_PATH}` as const;
 export const GITHUB_CALLBACK_URL = `${BRIDGE_ORIGIN}/callback` as const;
+export const GITHUB_ORIGIN = 'https://github.com' as const;
 
 export const TCG_SCOUT_BASE_URL =
   'https://tcg-scout-arcane-market-hunter.xorqe.chatgpt.site' as const;

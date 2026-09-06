@@ -9,6 +9,7 @@ import {
   AUTH_MAX_BODY_BYTES,
   BRIDGE_ORIGIN,
   GITHUB_CALLBACK_URL,
+  GITHUB_ORIGIN,
   MCP_RESOURCE,
   SCOUT_SCOPES,
 } from './constants';
@@ -64,11 +65,13 @@ const storedFlowSchema: z.ZodType<StoredFlow> = z
   })
   .strict();
 
-function securityHeaders(contentType = 'text/plain; charset=utf-8'): Headers {
+function securityHeaders(
+  contentType = 'text/plain; charset=utf-8',
+  formAction = "'self'",
+): Headers {
   return new Headers({
     'cache-control': 'no-store',
-    'content-security-policy':
-      "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'content-security-policy': `default-src 'none'; base-uri 'none'; form-action ${formAction}; frame-ancestors 'none'`,
     'content-type': contentType,
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
@@ -80,11 +83,15 @@ function localError(status: number, message: string): Response {
   return new Response(message, { status, headers: securityHeaders() });
 }
 
-function redirect(location: string, cookie?: string): Response {
+function redirect(
+  location: string,
+  cookie?: string,
+  status: 302 | 303 = 302,
+): Response {
   const headers = securityHeaders();
   headers.set('location', location);
   if (cookie) headers.set('set-cookie', cookie);
-  return new Response(null, { status: 302, headers });
+  return new Response(null, { status, headers });
 }
 
 function escapeHtml(value: string): string {
@@ -132,9 +139,13 @@ async function putFlow(
   flowId: string,
   flow: StoredFlow,
 ): Promise<void> {
-  await env.OAUTH_KV.put(`${FLOW_KEY_PREFIX}${flowId}`, JSON.stringify(flow), {
-    expirationTtl: AUTH_FLOW_TTL_SECONDS,
-  });
+  await env.OAUTH_KV.put(
+    `${FLOW_KEY_PREFIX}${flow.phase}:${flowId}`,
+    JSON.stringify(flow),
+    {
+      expirationTtl: AUTH_FLOW_TTL_SECONDS,
+    },
+  );
 }
 
 async function consumeFlow(
@@ -142,16 +153,19 @@ async function consumeFlow(
   flowId: string,
   phase: StoredFlow['phase'],
 ): Promise<StoredFlow | null> {
-  const key = `${FLOW_KEY_PREFIX}${flowId}`;
+  const key = `${FLOW_KEY_PREFIX}${phase}:${flowId}`;
   const raw = await env.OAUTH_KV.get(key);
-  await env.OAUTH_KV.delete(key);
   if (!raw) return null;
+  let flow: StoredFlow;
   try {
-    const flow = storedFlowSchema.parse(JSON.parse(raw));
-    return flow.phase === phase ? flow : null;
+    flow = storedFlowSchema.parse(JSON.parse(raw));
   } catch {
+    await env.OAUTH_KV.delete(key);
     return null;
   }
+  if (flow.phase !== phase) return null;
+  await env.OAUTH_KV.delete(key);
+  return flow;
 }
 
 async function startAuthorization(
@@ -212,7 +226,10 @@ async function startAuthorization(
 <p>You will sign in with GitHub. Only GitHub account 56995940 is allowed.</p>
 <form method="post" action="/authorize"><input type="hidden" name="flow_id" value="${flowId}"><input type="hidden" name="csrf" value="${nonce}">
 <button type="submit" name="decision" value="approve">Continue with GitHub</button><button type="submit" name="decision" value="deny">Deny</button></form></main></body></html>`;
-  const headers = securityHeaders('text/html; charset=utf-8');
+  const headers = securityHeaders(
+    'text/html; charset=utf-8',
+    `'self' ${GITHUB_ORIGIN} ${new URL(parsed.data.redirectUri).origin}`,
+  );
   headers.set('set-cookie', secureCookie(CONSENT_COOKIE, cookie));
   return new Response(html, { status: 200, headers });
 }
@@ -272,6 +289,7 @@ async function submitConsent(
   return redirect(
     githubAuthorizationUrl(env, githubState),
     secureCookie(GITHUB_COOKIE, githubCookie),
+    303,
   );
 }
 
