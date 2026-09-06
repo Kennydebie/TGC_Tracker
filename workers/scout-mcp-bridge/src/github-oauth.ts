@@ -61,7 +61,7 @@ async function githubFetch(
   try {
     return await fetchImplementation(input, {
       ...init,
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(DOWNSTREAM_TIMEOUT_MS),
     });
   } catch {

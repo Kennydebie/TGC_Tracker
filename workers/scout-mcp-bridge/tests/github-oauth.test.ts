@@ -35,6 +35,7 @@ describe('GitHub OAuth exchange', () => {
     ).resolves.toEqual({ id: 56_995_940, login: 'Kennydebie' });
 
     const tokenRequest = fetchImplementation.mock.calls[0]?.[1] as RequestInit;
+    expect(tokenRequest.redirect).toBe('manual');
     expect(tokenRequest.headers).toEqual(
       expect.objectContaining({
         'content-type': 'application/x-www-form-urlencoded',

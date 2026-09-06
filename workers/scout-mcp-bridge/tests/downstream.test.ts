@@ -62,7 +62,7 @@ describe('fixed downstream API calls', () => {
     expect(url).toBe(
       'https://tcg-scout-arcane-market-hunter.xorqe.chatgpt.site/api/integrations/scout-mcp/state?recentRunLimit=8&recentFindingLimit=40',
     );
-    expect(init?.redirect).toBe('error');
+    expect(init?.redirect).toBe('manual');
     const headers = new Headers(init?.headers);
     expect(headers.get('x-tcg-scout-oauth-subject')).toBe('github:56995940');
     expect(headers.get('authorization')).toBe(
@@ -102,7 +102,7 @@ describe('fixed downstream API calls', () => {
       'https://tcg-scout-arcane-market-hunter.xorqe.chatgpt.site/api/integrations/scout-mcp/findings',
     );
     expect(init?.method).toBe('POST');
-    expect(init?.redirect).toBe('error');
+    expect(init?.redirect).toBe('manual');
   });
 
   it('rejects unbounded or malformed responses without exposing their bodies', async () => {
