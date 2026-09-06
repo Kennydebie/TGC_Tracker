@@ -1,9 +1,32 @@
 import {
   type AuthRequest,
   AuthorizationError,
+  type CompleteAuthorizationOptions,
   type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const authenticateGitHubCode = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve({ id: 56_995_940, login: 'Kennydebie' })),
+);
+
+vi.mock('../src/github-oauth', () => ({
+  authenticateGitHubCode,
+  githubAuthorizationUrl: (
+    env: { GITHUB_CLIENT_ID: string },
+    state: string,
+  ) => {
+    const url = new URL('https://github.com/login/oauth/authorize');
+    url.searchParams.set('client_id', env.GITHUB_CLIENT_ID);
+    url.searchParams.set(
+      'redirect_uri',
+      'https://tcg-scout-mcp-bridge.kennydebie1.workers.dev/callback',
+    );
+    url.searchParams.set('state', state);
+    url.searchParams.set('allow_signup', 'false');
+    return url.href;
+  },
+}));
 
 import { authHandler } from '../src/auth-handler';
 import {
@@ -39,17 +62,14 @@ const baseEnv = {
 
 const clientRedirectUri = 'https://chatgpt.com/connectors/oauth/callback';
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function createAuthorizationHarness() {
-  const store = new Map<string, string>();
-  const get = vi.fn((key: string) => Promise.resolve(store.get(key) ?? null));
-  const put = vi.fn((key: string, value: string) => {
-    store.set(key, value);
-    return Promise.resolve();
-  });
-  const deleteFlow = vi.fn((key: string) => {
-    store.delete(key);
-    return Promise.resolve();
-  });
+  const get = vi.fn(() => Promise.resolve(null));
+  const put = vi.fn(() => Promise.resolve());
+  const deleteFlow = vi.fn(() => Promise.resolve());
   const authRequest: AuthRequest = {
     responseType: 'code',
     clientId: 'chatgpt-client',
@@ -69,16 +89,28 @@ function createAuthorizationHarness() {
       clientName: 'ChatGPT',
     }),
   );
+  const completeAuthorization = vi.fn(
+    (options: CompleteAuthorizationOptions) => {
+      const redirectTo = new URL(options.request.redirectUri);
+      redirectTo.searchParams.set('code', 'chatgpt-code');
+      redirectTo.searchParams.set('state', options.request.state);
+      if (options.request.issuer) {
+        redirectTo.searchParams.set('iss', options.request.issuer);
+      }
+      return Promise.resolve({ redirectTo: redirectTo.href });
+    },
+  );
   const env = {
     ...baseEnv,
     OAUTH_KV: { get, put, delete: deleteFlow },
     OAUTH_PROVIDER: {
       parseAuthRequest,
       lookupClient,
+      completeAuthorization,
     } as unknown as OAuthHelpers,
   } as unknown as BridgeAuthEnv;
 
-  return { deleteFlow, env, put, store };
+  return { completeAuthorization, deleteFlow, env, get, put };
 }
 
 function hiddenInput(html: string, name: string): string {
@@ -239,29 +271,57 @@ describe('authorization consent navigation', () => {
     );
   });
 
-  it('does not delete the GitHub phase on a stale repeated consent POST', async () => {
-    const { deleteFlow, env, put, store } = createAuthorizationHarness();
+  it('keeps the browser flow portable across Cloudflare locations without KV state', async () => {
+    const { deleteFlow, env, get, put } = createAuthorizationHarness();
     const consent = await beginConsent(env);
     const firstResponse = await submitConsent(env, consent);
     expect(firstResponse.status).toBe(303);
-
-    const githubKey = [...store.keys()].find((key) =>
-      key.startsWith('bridge:oauth-flow:github:'),
-    );
-    if (!githubKey) throw new Error('Missing GitHub authorization flow.');
-    const githubFlow = store.get(githubKey);
-    expect(JSON.parse(githubFlow ?? '{}')).toMatchObject({ phase: 'github' });
-    const phaseWriteKeys = put.mock.calls.map(([key]) => key);
-    expect(phaseWriteKeys).toEqual([
-      `bridge:oauth-flow:consent:${consent.flowId}`,
-      `bridge:oauth-flow:github:${consent.flowId}`,
-    ]);
-
-    deleteFlow.mockClear();
     const repeatedResponse = await submitConsent(env, consent);
 
-    expect(repeatedResponse.status).toBe(400);
+    expect(repeatedResponse.status).toBe(303);
+    expect(get).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
     expect(deleteFlow).not.toHaveBeenCalled();
-    expect(store.get(githubKey)).toBe(githubFlow);
+  });
+
+  it('completes the GitHub callback using only its signed browser session', async () => {
+    const { completeAuthorization, env, get, put } =
+      createAuthorizationHarness();
+    const wait = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('scheduler', { wait });
+    const consent = await beginConsent(env);
+    const githubResponse = await submitConsent(env, consent);
+    const githubLocation = new URL(
+      githubResponse.headers.get('location') ?? '',
+    );
+    const state = githubLocation.searchParams.get('state');
+    if (!state) throw new Error('Missing GitHub state.');
+
+    const callbackResponse = await authHandler.fetch?.(
+      new Request(
+        `${GITHUB_CALLBACK_URL}?code=temporary-github-code&state=${encodeURIComponent(state)}`,
+        {
+          headers: { cookie: responseCookie(githubResponse) },
+        },
+      ),
+      env,
+      context,
+    );
+
+    expect(callbackResponse?.status).toBe(302);
+    expect(callbackResponse?.headers.get('location')).toBe(
+      `${clientRedirectUri}?code=chatgpt-code&state=chatgpt-state&iss=${encodeURIComponent(BRIDGE_ORIGIN)}`,
+    );
+    expect(authenticateGitHubCode).toHaveBeenCalledWith(
+      env,
+      'temporary-github-code',
+    );
+    expect(completeAuthorization).toHaveBeenCalledOnce();
+    const completion = completeAuthorization.mock.calls[0]?.[0];
+    expect(completion?.request.issuer).toBe(BRIDGE_ORIGIN);
+    expect(completion?.userId).toBe('github-56995940');
+    expect(wait).toHaveBeenCalledWith(1_500);
+    expect(get).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
   });
 });

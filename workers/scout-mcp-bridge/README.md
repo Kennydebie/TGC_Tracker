@@ -31,8 +31,12 @@ observability redacts query strings because OAuth codes and state appear there.
 OAuth access is audience-pinned to the exact `/mcp` resource. Only S256 PKCE is
 accepted. GitHub supplies identity only; the bridge requests no GitHub OAuth
 scope and permits only numeric GitHub user ID `56995940`. Consent and GitHub
-state use short-lived, HMAC-authenticated `__Host-` cookies and short-lived KV
-records.
+state use short-lived, size-bounded, HMAC-authenticated `__Host-` cookies, so a
+browser crossing Cloudflare locations does not depend on KV replication. KV is
+reserved for the OAuth provider's client registrations, authorization codes,
+grants and tokens. The callback waits 1.5 seconds after code issuance so the
+immediate ChatGPT token exchange does not rewrite the same grant key inside
+Workers KV's one-write-per-key-per-second window.
 
 ## One-time provisioning
 
@@ -101,7 +105,7 @@ populated `.dev.vars` file.
 ## Cost and platform notes
 
 This design can fit within Cloudflare's free plans at low traffic, but it is not
-cost-free by contract. OAuth registration, codes, grants, and flow state use KV
+cost-free by contract. OAuth registration, codes, grants, and tokens use KV
 reads and writes, and every MCP call uses Worker requests and CPU. Review the
 current [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
 and [Workers KV pricing](https://developers.cloudflare.com/kv/platform/pricing/)

@@ -86,4 +86,9 @@ npm run scout:mcp:cloudflare:deploy
 - Missing Windows native binding: run `npm ci --include=optional` with the dev server stopped.
 - D1 unavailable locally: expect explicit empty/unavailable states; Sites injects `DB` during deployed operation.
 - Connector says credentials required: configure only the named server-side variables and run the source test endpoint.
+- GitHub says connected but ChatGPT rejects the connector: inspect the bridge's
+  redacted `tcg-scout-oauth` events. No grant means the GitHub callback failed;
+  `invalid_grant` or `temporarily_unavailable` at `chatgpt_token_exchange`
+  indicates Workers KV visibility or write-rate pressure. Never log or paste
+  the authorization code, state, cookie, or token.
 - Parser format change: leave the source paused, inspect Review Queue, update the isolated test contract, and only then re-enable.

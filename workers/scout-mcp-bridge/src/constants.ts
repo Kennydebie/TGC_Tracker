@@ -27,3 +27,5 @@ export const DOWNSTREAM_MAX_BODY_BYTES = 256 * 1024;
 export const AUTH_MAX_BODY_BYTES = 8 * 1024;
 export const GITHUB_MAX_BODY_BYTES = 32 * 1024;
 export const AUTH_FLOW_TTL_SECONDS = 10 * 60;
+export const AUTH_COOKIE_MAX_BYTES = 4_096;
+export const OAUTH_GRANT_PROPAGATION_DELAY_MS = 1_500;

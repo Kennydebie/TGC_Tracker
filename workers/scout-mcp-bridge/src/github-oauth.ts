@@ -22,6 +22,19 @@ const tokenSchema = z
   })
   .passthrough();
 
+const tokenErrorSchema = z
+  .object({
+    error: z.string().min(1).max(100),
+  })
+  .passthrough();
+
+const safeTokenErrorCodes = new Set([
+  'bad_verification_code',
+  'incorrect_client_credentials',
+  'redirect_uri_mismatch',
+  'unverified_user_email',
+]);
+
 const githubUserSchema = z
   .object({
     id: z.number().int().positive().safe(),
@@ -68,25 +81,37 @@ export async function authenticateGitHubCode(
       method: 'POST',
       headers: {
         accept: 'application/json',
-        'content-type': 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
         'user-agent': 'tcg-scout-mcp-bridge',
       },
-      body: JSON.stringify({
+      body: new URLSearchParams({
         client_id: env.GITHUB_CLIENT_ID,
         client_secret: env.GITHUB_CLIENT_SECRET,
         code,
         redirect_uri: GITHUB_CALLBACK_URL,
-      }),
+      }).toString(),
     },
   );
   if (tokenResponse.status !== 200) {
-    throw new SafeHttpError('github_token_exchange_failed', 502);
+    throw new SafeHttpError('github_token_exchange_http_error', 502);
   }
-  const token = await readBoundedJson(
+  const tokenValue = await readBoundedJson(
     tokenResponse,
     GITHUB_MAX_BODY_BYTES,
-    tokenSchema,
+    z.unknown(),
   );
+  const parsedToken = tokenSchema.safeParse(tokenValue);
+  if (!parsedToken.success) {
+    const parsedError = tokenErrorSchema.safeParse(tokenValue);
+    if (!parsedError.success) {
+      throw new SafeHttpError('invalid_response_schema', 502);
+    }
+    const errorCode = safeTokenErrorCodes.has(parsedError.data.error)
+      ? parsedError.data.error
+      : 'rejected';
+    throw new SafeHttpError(`github_token_exchange_${errorCode}`, 502);
+  }
+  const token = parsedToken.data;
 
   const userResponse = await githubFetch(fetchImplementation, GITHUB_USER_URL, {
     method: 'GET',

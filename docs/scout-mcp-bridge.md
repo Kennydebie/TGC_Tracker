@@ -32,9 +32,11 @@ the app, run research, or schedule itself.
    bind it to the immutable GitHub subject configured in the Worker. The
    plaintext token is returned once; install it immediately as the Worker
    secret `TCG_SCOUT_INTEGRATION_TOKEN`.
-3. Create one dedicated Cloudflare KV namespace for OAuth state and grants.
-   Put its exact ID in the bridge `wrangler.jsonc` as `OAUTH_KV`. Do not reuse
-   Discord state or the Site D1 database.
+3. Create one dedicated Cloudflare KV namespace for the OAuth provider's client
+   registrations, authorization codes, grants, and tokens. Put its exact ID in
+   the bridge `wrangler.jsonc` as `OAUTH_KV`. Consent and GitHub callback state
+   stay in short-lived signed cookies and do not depend on KV replication. Do
+   not reuse Discord state or the Site D1 database.
 4. Create a GitHub OAuth App with these exact URLs:
 
    - Homepage: `https://tcg-scout-mcp-bridge.kennydebie1.workers.dev`
