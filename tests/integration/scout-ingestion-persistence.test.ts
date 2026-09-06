@@ -138,6 +138,7 @@ function payload(
         sourceKind: 'reddit_comment',
         sourceIdentifier: 'reddit:r/PokemonTCGNL',
         game: 'pokemon',
+        headline: null,
         productName: 'Test-only sealed product',
         productLanguage: null,
         updateType: 'restock',
@@ -150,6 +151,13 @@ function payload(
         retailerOrOfficialUrl: null,
         publishedAt: null,
         observedAt,
+        eventAt: null,
+        actionOpensAt: null,
+        actionDeadlineAt: null,
+        actionType: null,
+        actionInstruction: null,
+        actionUrl: null,
+        lifecycleStatus: 'unknown',
         price,
         currency: price === null ? null : 'EUR',
         region: null,
@@ -161,6 +169,45 @@ function payload(
       },
     ],
   };
+}
+
+function verifiedOfficialPayload(
+  runId: string,
+  observedAt: string,
+): SaveScoutFindingsInput {
+  const input = payload(runId, { observedAt, price: null });
+  const sourceIdentifier = 'official:example-tcg-registration';
+  const sourceUrl = 'https://example.com/tcg/registration';
+  input.run.sourceChecks = [
+    {
+      sourceIdentifier,
+      status: 'checked',
+      checkedAt: observedAt,
+      coverageThrough: observedAt,
+      errorCode: null,
+      detail: null,
+    },
+  ];
+  input.findings = [
+    {
+      ...input.findings[0],
+      sourceKind: 'official',
+      sourceIdentifier,
+      headline: 'Official registration is open',
+      sourceUrl,
+      subreddit: null,
+      sourcePostOrCommentId: null,
+      retailerName: null,
+      retailerOrOfficialUrl: sourceUrl,
+      verificationStatus: 'official_checked',
+      verificationEvidence: {
+        url: sourceUrl,
+        observedAt,
+        note: 'The official registration page remains open.',
+      },
+    },
+  ];
+  return input;
 }
 
 function count(database: DatabaseSync, table: string): number {
@@ -199,6 +246,19 @@ void test('imports are retry-safe, update material facts, and preserve seller id
     );
     assert.equal(replay.replayed, true);
     assert.equal(count(sqlite, 'scout_findings'), 1);
+    let freshness = sqlite
+      .prepare(
+        'SELECT material_changed_at, last_observed_at FROM scout_findings WHERE user_id = ?',
+      )
+      .get(userA.id);
+    assert.equal(
+      freshness?.material_changed_at,
+      Date.parse(firstInput.findings[0].observedAt),
+    );
+    assert.equal(
+      freshness?.last_observed_at,
+      Date.parse(firstInput.findings[0].observedAt),
+    );
 
     const unchangedInput = payload('run:unchanged', {
       observedAt: '2026-09-05T21:00:00Z',
@@ -211,6 +271,19 @@ void test('imports are retry-safe, update material facts, and preserve seller id
     );
     assert.equal(unchanged.unchanged, 1);
     assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+    freshness = sqlite
+      .prepare(
+        'SELECT material_changed_at, last_observed_at FROM scout_findings WHERE user_id = ?',
+      )
+      .get(userA.id);
+    assert.equal(
+      freshness?.material_changed_at,
+      Date.parse(firstInput.findings[0].observedAt),
+    );
+    assert.equal(
+      freshness?.last_observed_at,
+      Date.parse(unchangedInput.findings[0].observedAt),
+    );
 
     const updatedInput = payload('run:updated', {
       observedAt: '2026-09-05T22:00:00Z',
@@ -233,6 +306,19 @@ void test('imports are retry-safe, update material facts, and preserve seller id
       .get(userA.id);
     assert.equal(current?.price_cents, 3_995);
     assert.equal(current?.availability, 'in_stock');
+    freshness = sqlite
+      .prepare(
+        'SELECT material_changed_at, last_observed_at FROM scout_findings WHERE user_id = ?',
+      )
+      .get(userA.id);
+    assert.equal(
+      freshness?.material_changed_at,
+      Date.parse(updatedInput.findings[0].observedAt),
+    );
+    assert.equal(
+      freshness?.last_observed_at,
+      Date.parse(updatedInput.findings[0].observedAt),
+    );
 
     const seller = payload('run:other-seller', {
       observedAt: '2026-09-05T23:00:00Z',
@@ -287,12 +373,149 @@ void test('all reads and uniqueness constraints are isolated to the authenticate
   }
 });
 
+void test('verified rechecks refresh evidence without resetting material freshness', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  const firstObservedAt = '2026-09-05T20:02:00Z';
+  const recheckedAt = '2026-09-05T21:02:00Z';
+  try {
+    const first = verifiedOfficialPayload(
+      'run:verified-first',
+      firstObservedAt,
+    );
+    const inserted = await saveScoutFindings(
+      db,
+      userA,
+      first,
+      after(first.run.finishedAt),
+    );
+    assert.equal(inserted.inserted, 1);
+
+    const recheck = verifiedOfficialPayload(
+      'run:verified-recheck',
+      recheckedAt,
+    );
+    recheck.findings[0] = {
+      ...recheck.findings[0],
+      headline: 'Official registration remains open',
+      summary: 'TEST RECORD: the same official fact, phrased differently.',
+      verificationEvidence: {
+        ...recheck.findings[0].verificationEvidence!,
+        note: 'The same official page was checked again this hour.',
+      },
+    };
+    const unchanged = await saveScoutFindings(
+      db,
+      userA,
+      recheck,
+      after(recheck.run.finishedAt),
+    );
+    assert.equal(unchanged.unchanged, 1);
+    assert.equal(unchanged.updated, 0);
+    assert.equal(count(sqlite, 'scout_finding_observations'), 1);
+
+    const stored = sqlite
+      .prepare(
+        `SELECT material_changed_at, last_observed_at, verification_observed_at,
+                verification_evidence_json
+         FROM scout_findings WHERE user_id = ?`,
+      )
+      .get(userA.id);
+    assert.equal(stored?.material_changed_at, Date.parse(firstObservedAt));
+    assert.equal(stored?.last_observed_at, Date.parse(recheckedAt));
+    assert.equal(stored?.verification_observed_at, Date.parse(recheckedAt));
+    assert.equal(
+      JSON.parse(String(stored?.verification_evidence_json)).observedAt,
+      recheckedAt,
+    );
+    const dashboard = await listScoutResearchDashboard(db, userA);
+    assert.equal(
+      dashboard.findings[0].headline,
+      'Official registration remains open',
+    );
+    assert.equal(
+      dashboard.findings[0].summary,
+      'TEST RECORD: the same official fact, phrased differently.',
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
+void test('older future milestones survive the recent-finding display limit', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  applyMigrations(sqlite);
+  const db = asD1(sqlite);
+  try {
+    const milestone = payload('run:future-milestone', {
+      observedAt: '2026-09-05T20:02:00Z',
+      price: null,
+    });
+    milestone.findings[0] = {
+      ...milestone.findings[0],
+      headline: 'TEST RECORD: future release milestone',
+      eventAt: '2026-09-06T22:45:00Z',
+    };
+    await saveScoutFindings(
+      db,
+      userA,
+      milestone,
+      after(milestone.run.finishedAt),
+    );
+
+    for (let batch = 0; batch < 6; batch += 1) {
+      const observedAt = new Date(
+        Date.parse('2026-09-05T20:10:00Z') + batch * 60_000,
+      ).toISOString();
+      const recent = payload(`run:recent-${batch}`, {
+        observedAt,
+        price: null,
+      });
+      const template = recent.findings[0];
+      recent.findings = Array.from({ length: 20 }, (_, index) => ({
+        ...template,
+        headline: `TEST RECORD: recent finding ${batch}-${index}`,
+        productName: `TEST RECORD: product ${batch}-${index}`,
+        eventAt: '2026-09-06T10:00:00Z',
+        sourcePostOrCommentId: `comment:recent-${batch}-${index}`,
+        sourceUrl: `https://www.reddit.com/r/PokemonTCGNL/comments/test/comment/recent-${batch}-${index}`,
+      }));
+      await saveScoutFindings(db, userA, recent, after(recent.run.finishedAt));
+    }
+
+    const dashboard = await listScoutResearchDashboard(
+      db,
+      userA,
+      Date.parse('2026-09-06T22:30:00Z'),
+    );
+    const persistedMilestone = dashboard.findings.find(
+      (finding) => finding.headline === 'TEST RECORD: future release milestone',
+    );
+    assert.equal(persistedMilestone?.eventAt, '2026-09-06T22:45:00Z');
+    assert.ok(dashboard.findings.length > 50);
+  } finally {
+    sqlite.close();
+  }
+});
+
 void test('unknown values remain null in Community Radar', async () => {
   const sqlite = new DatabaseSync(':memory:');
   applyMigrations(sqlite);
   const db = asD1(sqlite);
   try {
     const unknown = payload('run:unknown', { price: null });
+    unknown.findings[0] = {
+      ...unknown.findings[0],
+      headline: 'Registration window confirmed',
+      eventAt: '2026-10-03T09:00:00+02:00',
+      actionOpensAt: '2026-09-10T09:00:00+02:00',
+      actionDeadlineAt: '2026-09-20T18:00:00+02:00',
+      actionType: 'register',
+      actionInstruction: 'Register on the organizer page before the deadline.',
+      actionUrl: 'https://example.com/register',
+      lifecycleStatus: 'registration_open',
+    };
     await saveScoutFindings(db, userA, unknown, after(unknown.run.finishedAt));
     const dashboard = await listScoutResearchDashboard(db, userA);
     assert.equal(dashboard.findings[0].price, null);
@@ -301,6 +524,21 @@ void test('unknown values remain null in Community Radar', async () => {
     assert.equal(dashboard.findings[0].region, null);
     assert.equal(dashboard.findings[0].shippingToNetherlands, 'unknown');
     assert.equal(dashboard.findings[0].availability, 'unknown');
+    assert.equal(
+      dashboard.findings[0].headline,
+      'Registration window confirmed',
+    );
+    assert.equal(dashboard.findings[0].actionType, 'register');
+    assert.equal(
+      dashboard.findings[0].actionDeadlineAt,
+      '2026-09-20T18:00:00+02:00',
+    );
+    assert.equal(dashboard.findings[0].lifecycleStatus, 'registration_open');
+    assert.equal(
+      dashboard.findings[0].materialChangedAt,
+      new Date(unknown.findings[0].observedAt).toISOString(),
+    );
+    assert.equal(dashboard.importStatus.latestRun?.inserted, 1);
   } finally {
     sqlite.close();
   }

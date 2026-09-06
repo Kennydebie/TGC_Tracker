@@ -62,6 +62,28 @@ function iso(value: number | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
+function amsterdamDateKey(now = Date.now()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'Europe/Amsterdam',
+  }).formatToParts(new Date(now));
+  const value = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value]),
+  );
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function milestoneSortAt(value: string | null): number | null {
+  if (!value) return null;
+  return Date.parse(
+    /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00Z` : value,
+  );
+}
+
 async function prepareFindings(
   findings: ScoutFindingInput[],
 ): Promise<PreparedFinding[]> {
@@ -189,6 +211,7 @@ function findingValues(
     finding.sourceKind,
     finding.sourceIdentifier,
     finding.game,
+    finding.headline,
     finding.productName,
     finding.productLanguage,
     finding.updateType,
@@ -199,6 +222,17 @@ function findingValues(
     finding.retailerName,
     finding.retailerOrOfficialUrl,
     finding.publishedAt ? Date.parse(finding.publishedAt) : null,
+    finding.eventAt,
+    finding.actionOpensAt,
+    finding.actionDeadlineAt,
+    milestoneSortAt(finding.eventAt),
+    milestoneSortAt(finding.actionOpensAt),
+    milestoneSortAt(finding.actionDeadlineAt),
+    finding.actionType,
+    finding.actionInstruction,
+    finding.actionUrl,
+    finding.lifecycleStatus,
+    Date.parse(finding.observedAt),
     Date.parse(finding.observedAt),
     Date.parse(finding.observedAt),
     finding.price === null ? null : Math.round(finding.price * 100),
@@ -243,6 +277,12 @@ async function prepareObservation(
          payload_json, data_mode, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'production', ?, ?)
        ON CONFLICT(user_id, finding_id, material_hash) DO UPDATE SET
+         run_id = CASE
+           WHEN excluded.observed_at >= scout_finding_observations.observed_at
+             THEN excluded.run_id ELSE scout_finding_observations.run_id END,
+         payload_json = CASE
+           WHEN excluded.observed_at >= scout_finding_observations.observed_at
+             THEN excluded.payload_json ELSE scout_finding_observations.payload_json END,
          observed_at = MAX(observed_at, excluded.observed_at),
          updated_at = excluded.updated_at`,
     )
@@ -289,15 +329,18 @@ async function prepareFindingMutation(
       .prepare(
         `INSERT INTO scout_findings
           (id, user_id, dedupe_key, source_kind, source_identifier, game,
-           product_name, product_language, update_type, summary, source_url,
-           subreddit, source_post_or_comment_id, retailer_name,
-           retailer_or_official_url, published_at, first_observed_at,
-           last_observed_at, price_cents, currency, region,
+           headline, product_name, product_language, update_type, summary,
+           source_url, subreddit, source_post_or_comment_id, retailer_name,
+           retailer_or_official_url, published_at, event_at, action_opens_at,
+           action_deadline_at, event_sort_at, action_opens_sort_at,
+           action_deadline_sort_at, action_type, action_instruction,
+           action_url, lifecycle_status, first_observed_at, last_observed_at,
+           material_changed_at, price_cents, currency, region,
            shipping_to_netherlands, availability, verification_status,
            verification_evidence_url, verification_observed_at,
            verification_evidence_json, collection_method, material_hash,
            latest_run_id, data_mode, created_at, updated_at)
-         VALUES (${Array.from({ length: 33 }, () => '?').join(', ')})
+         VALUES (${Array.from({ length: 45 }, () => '?').join(', ')})
          ON CONFLICT(user_id, dedupe_key) DO NOTHING`,
       )
       .bind(...findingValues(entry, userId, findingId, runId, now));
@@ -310,7 +353,8 @@ async function prepareFindingMutation(
       ],
     };
   }
-  const observedAt = Date.parse(entry.finding.observedAt);
+  const finding = entry.finding;
+  const observedAt = Date.parse(finding.observedAt);
   if (stored.material_hash === entry.materialHash) {
     const update = db
       .prepare(
@@ -318,10 +362,45 @@ async function prepareFindingMutation(
          SET last_observed_at = MAX(last_observed_at, ?),
              latest_run_id = CASE
                WHEN ? >= last_observed_at THEN ? ELSE latest_run_id END,
+             headline = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE headline END,
+             summary = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE summary END,
+             action_instruction = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE action_instruction END,
+             verification_evidence_url = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE verification_evidence_url END,
+             verification_observed_at = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE verification_observed_at END,
+             verification_evidence_json = CASE
+               WHEN ? >= last_observed_at THEN ? ELSE verification_evidence_json END,
              updated_at = ?
          WHERE id = ? AND user_id = ?`,
       )
-      .bind(observedAt, observedAt, runId, now, stored.id, userId);
+      .bind(
+        observedAt,
+        observedAt,
+        runId,
+        observedAt,
+        finding.headline,
+        observedAt,
+        finding.summary,
+        observedAt,
+        finding.actionInstruction,
+        observedAt,
+        finding.verificationEvidence?.url ?? null,
+        observedAt,
+        finding.verificationEvidence
+          ? Date.parse(finding.verificationEvidence.observedAt)
+          : null,
+        observedAt,
+        finding.verificationEvidence
+          ? JSON.stringify(finding.verificationEvidence)
+          : null,
+        now,
+        stored.id,
+        userId,
+      );
     return {
       id: stored.id,
       outcome: 'unchanged',
@@ -339,17 +418,20 @@ async function prepareFindingMutation(
         await prepareObservation(db, entry, userId, stored.id, runId, now),
       ],
     };
-  const finding = entry.finding;
   const update = db
     .prepare(
       `UPDATE scout_findings SET
-         source_kind = ?, source_identifier = ?, game = ?, product_name = ?,
-         product_language = ?, update_type = ?, summary = ?, source_url = ?,
-         subreddit = ?, source_post_or_comment_id = ?, retailer_name = ?,
-         retailer_or_official_url = ?, published_at = ?,
-         last_observed_at = MAX(last_observed_at, ?), price_cents = ?,
-         currency = ?, region = ?, shipping_to_netherlands = ?,
-         availability = ?, verification_status = ?,
+         source_kind = ?, source_identifier = ?, game = ?, headline = ?,
+         product_name = ?, product_language = ?, update_type = ?, summary = ?,
+         source_url = ?, subreddit = ?, source_post_or_comment_id = ?,
+         retailer_name = ?, retailer_or_official_url = ?, published_at = ?,
+         event_at = ?, action_opens_at = ?, action_deadline_at = ?,
+         event_sort_at = ?, action_opens_sort_at = ?,
+         action_deadline_sort_at = ?, action_type = ?, action_instruction = ?,
+         action_url = ?,
+         lifecycle_status = ?, last_observed_at = MAX(last_observed_at, ?),
+         material_changed_at = ?, price_cents = ?, currency = ?, region = ?,
+         shipping_to_netherlands = ?, availability = ?, verification_status = ?,
          verification_evidence_url = ?, verification_observed_at = ?,
          verification_evidence_json = ?, material_hash = ?, latest_run_id = ?,
          updated_at = ?
@@ -359,6 +441,7 @@ async function prepareFindingMutation(
       finding.sourceKind,
       finding.sourceIdentifier,
       finding.game,
+      finding.headline,
       finding.productName,
       finding.productLanguage,
       finding.updateType,
@@ -369,6 +452,17 @@ async function prepareFindingMutation(
       finding.retailerName,
       finding.retailerOrOfficialUrl,
       finding.publishedAt ? Date.parse(finding.publishedAt) : null,
+      finding.eventAt,
+      finding.actionOpensAt,
+      finding.actionDeadlineAt,
+      milestoneSortAt(finding.eventAt),
+      milestoneSortAt(finding.actionOpensAt),
+      milestoneSortAt(finding.actionDeadlineAt),
+      finding.actionType,
+      finding.actionInstruction,
+      finding.actionUrl,
+      finding.lifecycleStatus,
+      observedAt,
       observedAt,
       finding.price === null ? null : Math.round(finding.price * 100),
       finding.currency,
@@ -762,28 +856,96 @@ export async function getScoutIngestionState(
 export async function listScoutResearchDashboard(
   db: D1Database,
   user: RequestUser,
+  now = Date.now(),
 ) {
   const state = await getScoutIngestionState(db, user, {
     recentRunLimit: 1,
     recentFindingLimit: 50,
   });
+  const milestoneDateFloor = amsterdamDateKey(now);
   const rows = await db
     .prepare(
-      `SELECT id, game, product_name, product_language, update_type, summary,
-              source_url, subreddit, source_post_or_comment_id,
-              retailer_or_official_url, published_at, last_observed_at,
+      `WITH recent AS (
+         SELECT id
+         FROM scout_findings
+         WHERE user_id = ? AND data_mode = 'production'
+         ORDER BY last_observed_at DESC
+         LIMIT 50
+       ), future_milestones AS (
+         SELECT id, MIN(milestone) AS next_at
+         FROM (
+           SELECT id, event_sort_at AS milestone
+           FROM scout_findings
+           WHERE user_id = ? AND data_mode = 'production'
+             AND ((length(event_at) = 10 AND event_at >= ?)
+               OR (length(event_at) > 10 AND event_sort_at >= ?))
+           UNION ALL
+           SELECT id, action_opens_sort_at AS milestone
+           FROM scout_findings
+           WHERE user_id = ? AND data_mode = 'production'
+             AND ((length(action_opens_at) = 10 AND action_opens_at >= ?)
+               OR (length(action_opens_at) > 10 AND action_opens_sort_at >= ?))
+           UNION ALL
+           SELECT id, action_deadline_sort_at AS milestone
+           FROM scout_findings
+           WHERE user_id = ? AND data_mode = 'production'
+             AND ((length(action_deadline_at) = 10 AND action_deadline_at >= ?)
+               OR (length(action_deadline_at) > 10 AND action_deadline_sort_at >= ?))
+         )
+         GROUP BY id
+         ORDER BY next_at ASC
+         LIMIT 100
+       ), active_windows AS (
+         SELECT id
+         FROM scout_findings
+         WHERE user_id = ? AND data_mode = 'production'
+           AND lifecycle_status IN ('registration_open', 'preorder_open', 'in_stock')
+         ORDER BY last_observed_at DESC
+         LIMIT 50
+       ), candidate_ids AS (
+         SELECT id FROM recent
+         UNION
+         SELECT id FROM future_milestones
+         UNION
+         SELECT id FROM active_windows
+       )
+       SELECT id, source_kind, source_identifier, game, headline, product_name,
+              product_language, update_type, summary, source_url, subreddit,
+              source_post_or_comment_id, retailer_name,
+              retailer_or_official_url, published_at, event_at,
+              action_opens_at, action_deadline_at, action_type,
+              action_instruction, action_url, lifecycle_status,
+              last_observed_at,
+              COALESCE(material_changed_at, first_observed_at) AS material_changed_at,
               price_cents, currency, region, shipping_to_netherlands,
               availability, verification_status, verification_evidence_url,
               verification_observed_at, collection_method
        FROM scout_findings
        WHERE user_id = ? AND data_mode = 'production'
+         AND id IN (SELECT id FROM candidate_ids)
        ORDER BY last_observed_at DESC
-       LIMIT 50`,
+       LIMIT 200`,
     )
-    .bind(user.id)
+    .bind(
+      user.id,
+      user.id,
+      milestoneDateFloor,
+      now,
+      user.id,
+      milestoneDateFloor,
+      now,
+      user.id,
+      milestoneDateFloor,
+      now,
+      user.id,
+      user.id,
+    )
     .all<{
       id: string;
+      source_kind: ScoutFindingInput['sourceKind'];
+      source_identifier: string;
       game: 'pokemon' | 'riftbound';
+      headline: string | null;
       product_name: string | null;
       product_language: string | null;
       update_type: ScoutFindingInput['updateType'];
@@ -791,9 +953,18 @@ export async function listScoutResearchDashboard(
       source_url: string | null;
       subreddit: string | null;
       source_post_or_comment_id: string | null;
+      retailer_name: string | null;
       retailer_or_official_url: string | null;
       published_at: number | null;
+      event_at: string | null;
+      action_opens_at: string | null;
+      action_deadline_at: string | null;
+      action_type: ScoutFindingInput['actionType'];
+      action_instruction: string | null;
+      action_url: string | null;
+      lifecycle_status: ScoutFindingInput['lifecycleStatus'];
       last_observed_at: number;
+      material_changed_at: number;
       price_cents: number | null;
       currency: 'EUR' | 'GBP' | 'USD' | null;
       region: string | null;
@@ -810,7 +981,10 @@ export async function listScoutResearchDashboard(
   return {
     findings: (rows.results ?? []).map((row) => ({
       id: row.id,
+      sourceKind: row.source_kind,
+      sourceIdentifier: row.source_identifier,
       game: row.game,
+      headline: row.headline,
       productName: row.product_name,
       productLanguage: row.product_language,
       updateType: row.update_type,
@@ -818,9 +992,18 @@ export async function listScoutResearchDashboard(
       sourceUrl: row.source_url,
       subreddit: row.subreddit,
       sourceExternalId: row.source_post_or_comment_id,
+      retailerName: row.retailer_name,
       retailerOrOfficialUrl: row.retailer_or_official_url,
       publishedAt: iso(row.published_at),
       observedAt: new Date(row.last_observed_at).toISOString(),
+      materialChangedAt: new Date(row.material_changed_at).toISOString(),
+      eventAt: row.event_at,
+      actionOpensAt: row.action_opens_at,
+      actionDeadlineAt: row.action_deadline_at,
+      actionType: row.action_type,
+      actionInstruction: row.action_instruction,
+      actionUrl: row.action_url,
+      lifecycleStatus: row.lifecycle_status,
       price: row.price_cents === null ? null : row.price_cents / 100,
       currency: row.currency,
       region: row.region,
@@ -836,6 +1019,21 @@ export async function listScoutResearchDashboard(
       lastAttemptAt: state.lastAttemptAt,
       lastRunStatus: state.lastRunStatus,
       actionableError: state.actionableError,
+      latestRun: state.recentRuns[0]
+        ? {
+            finishedAt: state.recentRuns[0].finishedAt,
+            inserted: state.recentRuns[0].inserted,
+            updated: state.recentRuns[0].updated,
+            unchanged: state.recentRuns[0].unchanged,
+            rejected: state.recentRuns[0].rejected,
+            sourcesChecked: state.recentRuns[0].sourceChecks.filter(
+              (check) => check.status === 'checked',
+            ).length,
+            sourcesUnavailable: state.recentRuns[0].sourceChecks.filter(
+              (check) => check.status !== 'checked',
+            ).length,
+          }
+        : null,
     },
   };
 }

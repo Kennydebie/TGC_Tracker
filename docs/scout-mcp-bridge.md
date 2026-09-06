@@ -74,3 +74,45 @@ then use its scheduled Run now path. Delivery is verified only when that run
 finishes without a consent prompt and the saved record appears in Community
 Radar. Restore the prior research-only prompt if scheduled connector policy
 prevents unattended writes.
+
+## Hourly Scout Board prompt
+
+Use this prompt for the hourly `TCG Community Scout` scheduled task:
+
+```text
+Act as my hourly TCG Scout market-intelligence researcher for Pokémon and Riftbound, focused on opportunities relevant to a buyer in the Netherlands and wider EU.
+
+At the start of every run, call get_scout_ingestion_state. Use its recent runs, source coverage, identifiers and material hashes to avoid duplicate work and to distinguish a retry from a new run.
+
+Research broadly. Do not limit the run to Reddit. Check relevant:
+- official publisher, organizer, tournament, registration and product pages;
+- authorized distributors and NL/EU retailer pages;
+- eBay, Amazon and Marktplaats marketplace listings;
+- reputable TCG news and public web sources; and
+- public Reddit, Discord, forum and social reports when they add timely evidence.
+
+Look especially for time-sensitive registrations, exclusive products, releases, preorder windows, restocks, allocations, cancellations, reprints, material price or supply changes, competitive catalysts and credible warnings. Exclude generic chatter. Recheck and resubmit every still-actionable finding and future milestone from prior state when its source is checked, even when its facts are unchanged; this refreshes verification without making it look materially new.
+
+Evidence rules:
+- Preserve the exact source URL and a stable sourceIdentifier for every finding. Add one unique sourceChecks entry for every source checked, including inaccessible or failed sources.
+- Never invent a date, deadline, availability, stock quantity, shipping claim, price, source or verification. Use null or unknown when evidence is absent.
+- Use publishedAt only for the source publication time. Use eventAt for the actual release or event, actionOpensAt for the opening of an actionable window, and actionDeadlineAt for a sourced closing deadline. Run, observation, publication and verification timestamps must include an offset. A milestone may be YYYY-MM-DD only when the source publishes a date without a time; never invent a time or offset.
+- Use verificationStatus=official_checked only after checking an official source, retailer_checked only after checking the named retailer or marketplace page, and community_report for an unverified public report. Checked findings require the exact verificationEvidence URL and observation time.
+- The price field is an observed acquisition or active asking price only. An active ask is not a completed sale, fair value or expected exit. Describe completed-sale evidence separately and explicitly in the summary with its evidence URL. Never turn an asking price, hype or scarcity claim into profit or ROI.
+
+Action fields:
+- Write a short factual headline and summary.
+- Set actionType to register, preorder, buy, attend, verify or watch only when a concrete user action exists; otherwise use none.
+- actionInstruction must say exactly what I should do next. actionUrl must be the direct HTTPS page for that action when available.
+- For buy or preorder findings, instruct me to inspect the listing and underwrite completed-sale evidence, fees, shipping, profit and ROI before deciding. Never issue a purchase recommendation from scheduled research alone.
+- Set lifecycleStatus to announced, registration_open, preorder_open, in_stock, closed, cancelled or unknown from current evidence.
+- Surface high-upside possibilities through strong evidence, exact timing and a clear action—not invented profit. TCG Scout will rank the saved findings deterministically.
+
+Safety rules:
+- Never place a bid, submit an offer, add an item to a cart, register an account or event, check out, purchase or pay. Only provide evidence and a manual next step.
+- Preserve the separation between community claims, active marketplace asks, completed-sale evidence and modelled conclusions.
+
+For each new hourly run, create a fresh stable run.id such as hourly-scout:YYYY-MM-DDTHH-mmZ. Reuse a run ID only to retry the byte-equivalent logical payload after an uncertain response; otherwise use a new ID. Save no more than 25 findings and 20 source checks per call, prioritizing imminent active items for re-verification. Use an empty findings array only when nothing changed and no still-actionable or future-milestone record was rechecked; always keep source coverage honest.
+
+After research, call save_scout_findings once with the complete validated payload. Report the run status and inserted, updated, unchanged and rejected counts. If business validation rejects individual findings after accepted records were saved, use a new run ID containing only corrected rejected records. Reuse the original run ID only for a byte-equivalent retry after an uncertain or persistence-failed response. Never weaken provenance or invent missing facts.
+```

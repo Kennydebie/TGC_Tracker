@@ -2,8 +2,50 @@ import { z } from 'zod';
 
 export const COLLECTION_METHOD = 'chatgpt_web_research' as const;
 
+export const ACTION_TYPES = [
+  'register',
+  'preorder',
+  'buy',
+  'attend',
+  'verify',
+  'watch',
+  'none',
+] as const;
+
+export const LIFECYCLE_STATUSES = [
+  'announced',
+  'registration_open',
+  'preorder_open',
+  'in_stock',
+  'closed',
+  'cancelled',
+  'unknown',
+] as const;
+
 const timestampSchema = z.string().datetime({ offset: true });
 const nullableTimestampSchema = timestampSchema.nullable();
+const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use an ISO calendar date (YYYY-MM-DD).')
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return (
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() + 1 === month &&
+      parsed.getUTCDate() === day
+    );
+  }, 'Use a real calendar date.');
+const milestoneSchema = z.union([timestampSchema, calendarDateSchema]);
+
+function actionWindowIsReversed(opensAt: string, deadlineAt: string): boolean {
+  if (
+    calendarDateSchema.safeParse(opensAt).success ||
+    calendarDateSchema.safeParse(deadlineAt).success
+  )
+    return opensAt.slice(0, 10) > deadlineAt.slice(0, 10);
+  return Date.parse(opensAt) > Date.parse(deadlineAt);
+}
 const nullableText = (maximum: number) =>
   z.string().trim().min(1).max(maximum).nullable().optional().default(null);
 
@@ -92,6 +134,7 @@ export const findingSchema = z
     ]),
     sourceIdentifier: z.string().trim().min(1).max(200),
     game: z.enum(['pokemon', 'riftbound']),
+    headline: nullableText(180),
     productName: nullableText(240),
     productLanguage: nullableText(64),
     updateType: z.enum([
@@ -111,6 +154,13 @@ export const findingSchema = z
     retailerOrOfficialUrl: nullableUrlSchema,
     publishedAt: timestampSchema.nullable().optional().default(null),
     observedAt: timestampSchema,
+    eventAt: milestoneSchema.nullable().optional().default(null),
+    actionOpensAt: milestoneSchema.nullable().optional().default(null),
+    actionDeadlineAt: milestoneSchema.nullable().optional().default(null),
+    actionType: z.enum(ACTION_TYPES).nullable().optional().default(null),
+    actionInstruction: nullableText(400),
+    actionUrl: nullableUrlSchema,
+    lifecycleStatus: z.enum(LIFECYCLE_STATUSES).optional().default('unknown'),
     price: z.number().finite().positive().max(1_000_000).nullable(),
     currency: z.enum(['EUR', 'GBP', 'USD']).nullable(),
     region: nullableText(120),
@@ -169,6 +219,44 @@ export const findingSchema = z
         code: 'custom',
         path: ['verificationEvidence'],
         message: 'Checked claims require verification evidence.',
+      });
+    }
+    const hasActionDetails = Boolean(
+      finding.actionInstruction ||
+      finding.actionUrl ||
+      finding.actionOpensAt ||
+      finding.actionDeadlineAt,
+    );
+    if (
+      hasActionDetails &&
+      (!finding.actionType || finding.actionType === 'none')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['actionType'],
+        message: 'Action details require a concrete actionType.',
+      });
+    }
+    if (
+      finding.actionType &&
+      finding.actionType !== 'none' &&
+      !finding.actionInstruction
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['actionInstruction'],
+        message: 'A concrete actionType requires an actionInstruction.',
+      });
+    }
+    if (
+      finding.actionOpensAt &&
+      finding.actionDeadlineAt &&
+      actionWindowIsReversed(finding.actionOpensAt, finding.actionDeadlineAt)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['actionDeadlineAt'],
+        message: 'actionDeadlineAt must be on or after actionOpensAt.',
       });
     }
   });

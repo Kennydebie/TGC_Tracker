@@ -223,7 +223,7 @@ export function createScoutMcpServer(
     { name: 'tcg-scout-community-radar', version: '1.0.0' },
     {
       instructions:
-        'Call get_scout_ingestion_state before save_scout_findings. Preserve unknown facts and original provenance, use stable retry-safe run IDs, and report the returned import counts.',
+        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources. Preserve unknown facts and original provenance, use stable retry-safe run IDs, record dates or exact times only as published, never treat asking prices as profit, ROI, or a purchase recommendation, and report the returned import counts.',
     },
   );
   const authProps = dependencies.authProps ?? getMcpAuthContext()?.props;
@@ -234,7 +234,7 @@ export function createScoutMcpServer(
     {
       title: 'Get TCG Scout ingestion state',
       description:
-        "Return only this authorized account's recent web-research imports, source coverage, material hashes, and run outcomes. Call before research or import to avoid duplicates and coverage gaps.",
+        "Return only this authorized account's recent scheduled-research imports, broad source coverage, material hashes, and run outcomes. Call before research or import to avoid duplicates and coverage gaps.",
       inputSchema: getStateInputSchema,
       outputSchema: ingestionStateOutputSchema,
       annotations: {
@@ -276,7 +276,7 @@ export function createScoutMcpServer(
     {
       title: 'Save TCG Scout findings',
       description:
-        'Validate and save up to 25 Pokémon or Riftbound web-research findings with retry-safe source coverage for this authorized account. Preserve unknown values and provenance.',
+        'Validate and save up to 25 source-backed Pokémon or Riftbound market-intelligence findings with retry-safe source coverage for this authorized account. Include exact release/event dates and action deadlines when sourced; preserve unknown values and provenance.',
       inputSchema: saveFindingsInputSchema,
       outputSchema: saveFindingsOutputSchema,
       annotations: {

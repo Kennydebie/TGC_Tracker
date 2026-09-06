@@ -565,7 +565,7 @@ export function CommunityRadar({
           <TabsTrigger value="signals">Recent signals</TabsTrigger>
           <TabsTrigger value="restocks">Restock reports</TabsTrigger>
           <TabsTrigger value="reprints">Reprint watch</TabsTrigger>
-          <TabsTrigger value="research">Web research</TabsTrigger>
+          <TabsTrigger value="research">Scheduled research</TabsTrigger>
           <TabsTrigger value="sources">Information sources</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
         </TabsList>
@@ -1164,12 +1164,12 @@ function ResearchFindingGrid({
 }) {
   if (!findings.length)
     return (
-      <EmptyEvidence label="No web-research findings have been imported for this account." />
+      <EmptyEvidence label="No scheduled-research findings have been imported for this account." />
     );
   return (
     <section
       className="community-research-grid"
-      aria-label="ChatGPT web research findings"
+      aria-label="ChatGPT scheduled research findings"
     >
       {findings.map((finding) => {
         const sourceUrl = safeResearchUrl(finding.sourceUrl);
@@ -1180,7 +1180,7 @@ function ResearchFindingGrid({
           <article className="community-research-card" key={finding.id}>
             <header>
               <div>
-                <span className="signal-platform">Web research</span>
+                <span className="signal-platform">Scheduled research</span>
                 <h3>{finding.productName ?? 'Unknown product'}</h3>
                 <small>
                   {finding.game === 'pokemon' ? 'Pokémon' : 'Riftbound'}

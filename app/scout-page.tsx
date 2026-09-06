@@ -5,7 +5,17 @@ import {
 } from '@/app/chatgpt-auth';
 import { ScoutApp } from '@/components/scout-app';
 import { getD1 } from '@/db';
+import type { ScoutResearchImportStatus } from '@/lib/community';
 import { listProductionDeals } from '@/lib/repositories/scans';
+import { listScoutResearchDashboard } from '@/lib/repositories/scout-ingestion';
+
+const emptyImportStatus: ScoutResearchImportStatus = {
+  lastSuccessfulImportAt: null,
+  lastAttemptAt: null,
+  lastRunStatus: null,
+  actionableError: null,
+  latestRun: null,
+};
 
 export async function ScoutPage({
   section = 'dashboard',
@@ -29,6 +39,20 @@ export async function ScoutPage({
     getChatGPTUser(),
     initialDealsPromise,
   ]);
+  const initialResearch = user
+    ? await listScoutResearchDashboard(getD1(), {
+        id: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+      }).catch(() => ({
+        findings: [],
+        importStatus: {
+          ...emptyImportStatus,
+          actionableError:
+            'Scout Board storage is temporarily unavailable. Confirm the latest database migration and refresh.',
+        },
+      }))
+    : { findings: [], importStatus: emptyImportStatus };
   const basePath = section === 'dashboard' ? '/' : `/${section}`;
   const query = new URLSearchParams(initialSearchParams).toString();
   const path = query ? `${basePath}?${query}` : basePath;
@@ -37,6 +61,8 @@ export async function ScoutPage({
       initialSection={section}
       initialDealId={dealId}
       initialDeals={initialDeals}
+      initialResearchFindings={initialResearch.findings}
+      initialResearchImportStatus={initialResearch.importStatus}
       initialSearchParams={initialSearchParams}
       user={user ? { displayName: user.displayName, email: user.email } : null}
       signInPath={chatGPTSignInPath(path)}

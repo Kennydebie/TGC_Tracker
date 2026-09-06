@@ -216,7 +216,15 @@ export type CommunitySourceStatus = {
 
 export type ScoutResearchFinding = {
   id: string;
+  sourceKind:
+    | 'reddit_post'
+    | 'reddit_comment'
+    | 'retailer'
+    | 'official'
+    | 'public_web';
+  sourceIdentifier: string;
   game: 'pokemon' | 'riftbound';
+  headline: string | null;
   productName: string | null;
   productLanguage: string | null;
   updateType:
@@ -234,6 +242,29 @@ export type ScoutResearchFinding = {
   retailerOrOfficialUrl: string | null;
   publishedAt: string | null;
   observedAt: string;
+  materialChangedAt: string;
+  eventAt: string | null;
+  actionOpensAt: string | null;
+  actionDeadlineAt: string | null;
+  actionType:
+    | 'register'
+    | 'preorder'
+    | 'buy'
+    | 'attend'
+    | 'verify'
+    | 'watch'
+    | 'none'
+    | null;
+  actionInstruction: string | null;
+  actionUrl: string | null;
+  lifecycleStatus:
+    | 'announced'
+    | 'registration_open'
+    | 'preorder_open'
+    | 'in_stock'
+    | 'closed'
+    | 'cancelled'
+    | 'unknown';
   price: number | null;
   currency: 'EUR' | 'GBP' | 'USD' | null;
   region: string | null;
@@ -245,6 +276,7 @@ export type ScoutResearchFinding = {
     | 'official_checked';
   verificationEvidenceUrl: string | null;
   verificationObservedAt: string | null;
+  retailerName: string | null;
   collectionMethod: 'chatgpt_web_research';
 };
 
@@ -253,6 +285,15 @@ export type ScoutResearchImportStatus = {
   lastAttemptAt: string | null;
   lastRunStatus: 'completed' | 'partial' | 'failed' | null;
   actionableError: string | null;
+  latestRun: {
+    finishedAt: string;
+    inserted: number;
+    updated: number;
+    unchanged: number;
+    rejected: number;
+    sourcesChecked: number;
+    sourcesUnavailable: number;
+  } | null;
 };
 
 export type CommunityDashboard = {
@@ -325,6 +366,7 @@ export function emptyCommunityDashboard(
       lastAttemptAt: null,
       lastRunStatus: null,
       actionableError: null,
+      latestRun: null,
     },
     sources: options.sources ?? [],
     performance: {

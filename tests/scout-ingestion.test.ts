@@ -35,6 +35,7 @@ function input(): SaveScoutFindingsInput {
         sourceKind: 'reddit_comment',
         sourceIdentifier: 'reddit:r/PokemonTCGNL',
         game: 'pokemon',
+        headline: null,
         productName: null,
         productLanguage: null,
         updateType: 'restock',
@@ -47,6 +48,13 @@ function input(): SaveScoutFindingsInput {
         retailerOrOfficialUrl: null,
         publishedAt: null,
         observedAt: '2026-09-05T20:02:00Z',
+        eventAt: null,
+        actionOpensAt: null,
+        actionDeadlineAt: null,
+        actionType: null,
+        actionInstruction: null,
+        actionUrl: null,
+        lifecycleStatus: 'unknown',
         price: null,
         currency: null,
         region: null,
@@ -203,6 +211,185 @@ void test('validation bounds run, source, finding, publication, and verification
         issue.path === 'findings.0.verificationEvidence.observedAt' &&
         issue.code === 'timestamp_outside_run',
     ),
+  );
+});
+
+void test('validation accepts future official events and actionable registration deadlines', () => {
+  const candidate = input();
+  const sourceIdentifier = 'official:riftbound:event-registration';
+  candidate.run.sourceChecks = [
+    {
+      sourceIdentifier,
+      status: 'checked',
+      checkedAt: '2026-09-05T20:02:00Z',
+      coverageThrough: '2026-09-05T20:02:00Z',
+      errorCode: null,
+      detail: null,
+    },
+  ];
+  candidate.findings = [
+    {
+      ...candidate.findings[0],
+      sourceKind: 'official',
+      sourceIdentifier,
+      headline: 'TEST RECORD: official T1 registration window',
+      productName: 'TEST RECORD: T1 set',
+      updateType: 'release',
+      summary:
+        'TEST RECORD: official registration is open before the future release.',
+      sourceUrl: 'https://official.example/events/t1',
+      subreddit: null,
+      sourcePostOrCommentId: null,
+      retailerOrOfficialUrl: 'https://official.example/events/t1',
+      publishedAt: '2026-09-05T19:00:00Z',
+      eventAt: '2026-10-25',
+      actionOpensAt: '2026-09-06T08:00:00+02:00',
+      actionDeadlineAt: '2026-09-20T23:59:00+02:00',
+      actionType: 'register',
+      actionInstruction: 'Register through the official event page.',
+      actionUrl: 'https://official.example/events/t1/register',
+      lifecycleStatus: 'registration_open',
+      verificationStatus: 'official_checked',
+      verificationEvidence: {
+        url: 'https://official.example/events/t1',
+        observedAt: '2026-09-05T20:02:00Z',
+        note: 'TEST RECORD: official page checked during this run.',
+      },
+    },
+  ];
+
+  const parsed = validateScoutImportInput(
+    candidate,
+    Date.parse('2026-09-05T20:05:00Z'),
+  );
+  assert.equal(parsed.findings[0].sourceKind, 'official');
+  assert.equal(parsed.findings[0].eventAt, '2026-10-25');
+  assert.equal(parsed.findings[0].actionType, 'register');
+  assert.equal(
+    parsed.findings[0].actionDeadlineAt,
+    '2026-09-20T23:59:00+02:00',
+  );
+});
+
+void test('validation rejects incomplete action details and reversed action windows', () => {
+  const now = Date.parse('2026-09-05T20:05:00Z');
+
+  const missingType = input();
+  missingType.findings[0].actionInstruction = 'Register before the deadline.';
+  missingType.findings[0].actionDeadlineAt = '2026-09-20T23:59:00+02:00';
+  assert.ok(
+    validationIssues(missingType, now).some(
+      (issue) => issue.path === 'findings.0.actionType',
+    ),
+  );
+
+  const missingInstruction = input();
+  missingInstruction.findings[0].actionType = 'register';
+  assert.ok(
+    validationIssues(missingInstruction, now).some(
+      (issue) => issue.path === 'findings.0.actionInstruction',
+    ),
+  );
+
+  const reversedWindow = input();
+  reversedWindow.findings[0].actionType = 'register';
+  reversedWindow.findings[0].actionInstruction =
+    'Register through the official page.';
+  reversedWindow.findings[0].actionOpensAt = '2026-09-21T08:00:00+02:00';
+  reversedWindow.findings[0].actionDeadlineAt = '2026-09-20T23:59:00+02:00';
+  assert.ok(
+    validationIssues(reversedWindow, now).some(
+      (issue) => issue.path === 'findings.0.actionDeadlineAt',
+    ),
+  );
+
+  const impossibleDate = input();
+  impossibleDate.findings[0].eventAt = '2026-02-31';
+  assert.ok(
+    validationIssues(impossibleDate, now).some(
+      (issue) => issue.path === 'findings.0.eventAt',
+    ),
+  );
+
+  const mixedPrecision = input();
+  mixedPrecision.findings[0].actionType = 'register';
+  mixedPrecision.findings[0].actionInstruction = 'Check registration status.';
+  mixedPrecision.findings[0].actionOpensAt = '2026-09-20T08:00:00+02:00';
+  mixedPrecision.findings[0].actionDeadlineAt = '2026-09-20';
+  assert.doesNotThrow(() => validateScoutImportInput(mixedPrecision, now));
+});
+
+void test('validation accepts attributable official, retailer, and marketplace web sources', () => {
+  const candidate = input();
+  const sourceIdentifiers = [
+    'official:pokemon-news',
+    'retailer:amazon-de',
+    'marketplace:ebay-nl',
+    'marketplace:marktplaats-nl',
+  ] as const;
+  candidate.run.sourceChecks = sourceIdentifiers.map((sourceIdentifier) => ({
+    sourceIdentifier,
+    status: 'checked' as const,
+    checkedAt: '2026-09-05T20:02:00Z',
+    coverageThrough: '2026-09-05T20:02:00Z',
+    errorCode: null,
+    detail: null,
+  }));
+  const sourceCases = [
+    {
+      sourceKind: 'official' as const,
+      sourceIdentifier: sourceIdentifiers[0],
+      sourceUrl: 'https://www.pokemon.com/us/pokemon-news/test-record',
+      retailerName: null,
+      verificationStatus: 'official_checked' as const,
+    },
+    {
+      sourceKind: 'retailer' as const,
+      sourceIdentifier: sourceIdentifiers[1],
+      sourceUrl: 'https://www.amazon.de/dp/TESTRECORD',
+      retailerName: 'Amazon DE',
+      verificationStatus: 'retailer_checked' as const,
+    },
+    {
+      sourceKind: 'public_web' as const,
+      sourceIdentifier: sourceIdentifiers[2],
+      sourceUrl: 'https://www.ebay.nl/itm/100000000000',
+      retailerName: 'eBay NL',
+      verificationStatus: 'retailer_checked' as const,
+    },
+    {
+      sourceKind: 'public_web' as const,
+      sourceIdentifier: sourceIdentifiers[3],
+      sourceUrl: 'https://www.marktplaats.nl/v/test-record',
+      retailerName: 'Marktplaats',
+      verificationStatus: 'retailer_checked' as const,
+    },
+  ];
+  candidate.findings = sourceCases.map((source) => ({
+    ...candidate.findings[0],
+    ...source,
+    headline: `TEST RECORD: ${source.sourceIdentifier}`,
+    sourcePostOrCommentId: null,
+    subreddit: null,
+    retailerOrOfficialUrl: source.sourceUrl,
+    verificationEvidence: {
+      url: source.sourceUrl,
+      observedAt: '2026-09-05T20:02:00Z',
+      note: 'TEST RECORD: source checked during this run.',
+    },
+  }));
+
+  const parsed = validateScoutImportInput(
+    candidate,
+    Date.parse('2026-09-05T20:05:00Z'),
+  );
+  assert.deepEqual(
+    parsed.findings.map((finding) => finding.sourceKind),
+    ['official', 'retailer', 'public_web', 'public_web'],
+  );
+  assert.deepEqual(
+    parsed.run.sourceChecks.map((check) => check.sourceIdentifier),
+    sourceIdentifiers,
   );
 });
 

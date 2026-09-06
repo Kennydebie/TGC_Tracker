@@ -50,6 +50,7 @@ import { NativeNavigationLink } from '@/components/native-navigation-link';
 import { MarktplaatsScout } from '@/components/marktplaats-scout';
 import { AmazonScout } from '@/components/amazon-scout';
 import { CommunityRadar } from '@/components/community-radar';
+import { ScoutBoardIntelligence } from '@/components/scout-board-intelligence';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -108,6 +109,10 @@ import {
 import { isSafeSourceListingUrl } from '@/lib/listing-url';
 import type { MarktplaatsDashboard } from '@/lib/marktplaats';
 import type { AmazonDashboard } from '@/lib/amazon';
+import type {
+  ScoutResearchFinding,
+  ScoutResearchImportStatus,
+} from '@/lib/community';
 import {
   buildPortfolioCsv,
   searchDealsByIdentity,
@@ -151,6 +156,8 @@ type ScoutAppProps = {
   initialDealId?: string;
   initialSearchParams?: Record<string, string>;
   initialDeals?: Deal[];
+  initialResearchFindings?: ScoutResearchFinding[];
+  initialResearchImportStatus?: ScoutResearchImportStatus;
   user?: { displayName: string; email: string } | null;
   signInPath?: string;
   signOutPath?: string;
@@ -362,6 +369,21 @@ const navItems: {
   },
 ];
 
+const primaryNavSections = new Set<Section>([
+  'dashboard',
+  'deals',
+  'marketplaces',
+  'watchlist',
+  'portfolio',
+  'settings',
+]);
+const primaryNavItems = navItems.filter((item) =>
+  primaryNavSections.has(item.section),
+);
+const secondaryNavItems = navItems.filter(
+  (item) => !primaryNavSections.has(item.section),
+);
+
 const pageMeta: Record<Section, { title: string; subtitle: string }> = {
   dashboard: { title: 'Scout Board', subtitle: 'Market overview' },
   deals: {
@@ -425,6 +447,14 @@ export function ScoutApp({
   initialDealId,
   initialSearchParams = {},
   initialDeals = [],
+  initialResearchFindings = [],
+  initialResearchImportStatus = {
+    lastSuccessfulImportAt: null,
+    lastAttemptAt: null,
+    lastRunStatus: null,
+    actionableError: null,
+    latestRun: null,
+  },
   user,
   signInPath = '/signin-with-chatgpt?return_to=%2F',
   signOutPath = '/signout-with-chatgpt?return_to=%2F',
@@ -812,13 +842,7 @@ export function ScoutApp({
       <aside className="guild-sidebar">
         <BrandBlock />
         <nav aria-label="Primary navigation" className="guild-nav">
-          {navItems.map((item) => (
-            <NavLink
-              active={section === item.section}
-              item={item}
-              key={item.section}
-            />
-          ))}
+          <ScoutNavigation active={section} />
         </nav>
         <div className="realm-mini">
           <span className="pulse-dot" />
@@ -865,13 +889,7 @@ export function ScoutApp({
                   </SheetDescription>
                 </SheetHeader>
                 <nav className="guild-nav mobile-guild-nav">
-                  {navItems.map((item) => (
-                    <NavLink
-                      active={section === item.section}
-                      item={item}
-                      key={item.section}
-                    />
-                  ))}
+                  <ScoutNavigation active={section} />
                 </nav>
               </SheetContent>
             </Sheet>
@@ -922,7 +940,7 @@ export function ScoutApp({
               >
                 <Bell />
               </TooltipTrigger>
-              <TooltipContent>1 critical alert</TooltipContent>
+              <TooltipContent>View alerts</TooltipContent>
             </Tooltip>
             <Select defaultValue="EUR">
               <SelectTrigger className="currency-select" aria-label="Currency">
@@ -952,12 +970,16 @@ export function ScoutApp({
           {section === 'dashboard' && (
             <Dashboard
               deals={dealRecords}
+              initialResearchFindings={initialResearchFindings}
+              initialResearchImportStatus={initialResearchImportStatus}
               onInspect={setSelectedDeal}
               onOpenListing={(deal) => void recheckDeal(deal, true)}
               onTrack={toggleTrack}
               pendingTrackIds={visiblePendingTrackIds}
               recheckingIds={recheckingIds}
               trackedIds={trackedIds}
+              signInPath={signInPath}
+              userSignedIn={Boolean(user)}
             />
           )}
           {section === 'deals' && (
@@ -1089,6 +1111,7 @@ function NavLink({
     <NativeNavigationLink
       className={cn('guild-link', active && 'active')}
       href={item.href}
+      aria-label={`${item.label}: ${item.subtitle}`}
       aria-current={active ? 'page' : undefined}
     >
       <span className="nav-medallion">
@@ -1100,6 +1123,49 @@ function NavLink({
       </span>
       {active && <span className="active-rune" aria-hidden="true" />}
     </NativeNavigationLink>
+  );
+}
+
+function ScoutNavigation({ active }: { active: Section }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const secondaryActive = secondaryNavItems.some(
+    (item) => item.section === active,
+  );
+  return (
+    <>
+      {primaryNavItems.map((item) => (
+        <NavLink
+          active={active === item.section}
+          item={item}
+          key={item.section}
+        />
+      ))}
+      <details
+        className="guild-more-tools"
+        open={secondaryActive || moreOpen}
+        onToggle={(event) => setMoreOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <span className="nav-medallion">
+            <Boxes aria-hidden="true" />
+          </span>
+          <span>
+            <strong>More tools</strong>
+            <small>Research, review & utilities</small>
+          </span>
+          <ChevronDown aria-hidden="true" />
+        </summary>
+        <div className="guild-more-list">
+          {secondaryNavItems.map((item) => (
+            <NavLink
+              active={active === item.section}
+              item={item}
+              key={item.section}
+            />
+          ))}
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -1142,7 +1208,7 @@ function Account({
 
 function MobileBottomNav({ active }: { active: Section }) {
   const items = navItems.filter((item) =>
-    ['dashboard', 'deals', 'market', 'scanner', 'alerts'].includes(
+    ['dashboard', 'deals', 'marketplaces', 'watchlist', 'portfolio'].includes(
       item.section,
     ),
   );
@@ -1152,10 +1218,7 @@ function MobileBottomNav({ active }: { active: Section }) {
         const Icon = item.icon;
         return (
           <NativeNavigationLink
-            className={cn(
-              active === item.section && 'active',
-              item.section === 'scanner' && 'scan-action',
-            )}
+            className={cn(active === item.section && 'active')}
             href={item.href}
             key={item.section}
           >
@@ -1272,20 +1335,28 @@ function ScoreMedallion({
 
 function Dashboard({
   deals: records,
+  initialResearchFindings,
+  initialResearchImportStatus,
   onInspect,
   onOpenListing,
   onTrack,
   pendingTrackIds,
   recheckingIds,
   trackedIds,
+  signInPath,
+  userSignedIn,
 }: {
   deals: Deal[];
+  initialResearchFindings: ScoutResearchFinding[];
+  initialResearchImportStatus: ScoutResearchImportStatus;
   onInspect: (deal: Deal) => void;
   onOpenListing: (deal: Deal) => void;
   onTrack: (id: string) => Promise<void>;
   pendingTrackIds: Set<string>;
   recheckingIds: Set<string>;
   trackedIds: Set<string>;
+  signInPath: string;
+  userSignedIn: boolean;
 }) {
   const qualified = records.filter(qualifiesForQuickFlip);
   const liveEbayRecords = records.filter(isLiveEbayDeal);
@@ -1311,63 +1382,12 @@ function Dashboard({
   );
   return (
     <div className="page-stack">
-      <Panel className="command-panel">
-        <div className="command-copy">
-          <div className="panel-kicker">
-            <Compass /> Evidence-aware ledger · Europe/Amsterdam
-          </div>
-          <h2>The Scout’s Table</h2>
-          <p>
-            Inspect opportunities that still work after shipping, fees, labour,
-            liquidity and risk.
-          </p>
-          <div className="command-actions">
-            <Button
-              className="gold-button"
-              onClick={() => {
-                window.location.href = '/deals';
-              }}
-            >
-              <Compass /> Scout deals
-            </Button>
-            <Button
-              className="iron-button"
-              variant="outline"
-              onClick={() => {
-                window.location.href = '/scanner';
-              }}
-            >
-              <Camera /> Scan a card
-            </Button>
-          </div>
-        </div>
-        <div className="radar-orbit" aria-hidden="true">
-          <span className="orbit orbit-one" />
-          <span className="orbit orbit-two" />
-          <span className="radar-cross" />
-          <Compass />
-          <b>{qualified.length}</b>
-          <small>qualified hunts</small>
-        </div>
-        <div className="command-statuses">
-          <span>
-            <i
-              className={
-                liveEbayRecords.length > 0 ? 'status-live' : 'status-warn'
-              }
-            />{' '}
-            {liveEbayRecords.length > 0
-              ? `eBay connected · ${liveEbayRecords.length} active asks`
-              : 'eBay awaiting its first authenticated listing scan'}
-          </span>
-          <span>
-            <i className="status-warn" /> Cardmarket official URLs required
-          </span>
-          <span>
-            <i className="status-live" /> Production records only
-          </span>
-        </div>
-      </Panel>
+      <ScoutBoardIntelligence
+        initialFindings={initialResearchFindings}
+        initialImportStatus={initialResearchImportStatus}
+        signInPath={signInPath}
+        userSignedIn={userSignedIn}
+      />
 
       <div className="metric-grid">
         <MetricPlaque
@@ -1395,13 +1415,6 @@ function Dashboard({
           tone="violet"
         />
         <MetricPlaque
-          icon={CalendarDays}
-          label="Releases nearing"
-          value="0"
-          detail="no verified release feed connected"
-          tone="blue"
-        />
-        <MetricPlaque
           icon={HeartPulse}
           label="Live source records"
           value={String(
@@ -1413,13 +1426,6 @@ function Dashboard({
               : 'awaiting a live source scan'
           }
           tone="green"
-        />
-        <MetricPlaque
-          icon={ShieldAlert}
-          label="Needs review"
-          value="0"
-          detail="production queue only"
-          tone="amber"
         />
       </div>
 
@@ -1502,26 +1508,7 @@ function Dashboard({
         </div>
       </div>
 
-      <div className="content-grid lower-grid">
-        <Panel className="release-strip">
-          <SectionHeading
-            title="Release Watch"
-            subtitle="Verified release records only"
-            action={
-              <NativeNavigationLink className="text-link" href="/releases">
-                Open codex <ArrowRight />
-              </NativeNavigationLink>
-            }
-          />
-          <div className="empty-state compact-empty">
-            <CalendarDays />
-            <h3>No verified release feed connected</h3>
-            <p>
-              Release dates will appear only after a trusted source is
-              configured.
-            </p>
-          </div>
-        </Panel>
+      <div className="content-grid lower-grid dashboard-source-grid">
         <Panel className="source-strip">
           <SectionHeading title="Marketplaces" subtitle="Source freshness" />
           {dashboardSources.map((source) => (

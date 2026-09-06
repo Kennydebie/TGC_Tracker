@@ -8,19 +8,50 @@ export const SCOUT_MAX_CLOCK_SKEW_MS = 10 * 60_000;
 export const SCOUT_MAX_RUN_DURATION_MS = 24 * 60 * 60_000;
 export const SCOUT_TRACKED_SOURCES = [
   {
-    sourceIdentifier: 'reddit:r/PokemonTCGNL',
+    sourceIdentifier: 'official:publishers-and-organizers',
     description:
-      'r/PokemonTCGNL posts plus comments in the current Vette deals vrijdag thread.',
+      'Official Pokémon and Riftbound publisher, distributor, event and registration updates.',
   },
   {
-    sourceIdentifier: 'reddit:r/riftboundtcg',
+    sourceIdentifier: 'marketplaces:eu',
     description:
-      'r/riftboundtcg posts plus comments in the current restock megathread.',
+      'Relevant eBay, Amazon and Marktplaats listings or material price changes for NL/EU buyers.',
   },
   {
-    sourceIdentifier: 'reddit:r/PKMNTCGDeals',
-    description: 'r/PKMNTCGDeals posts and comments relevant to NL/EU buyers.',
+    sourceIdentifier: 'retailers:eu',
+    description:
+      'NL/EU retailer stock, preorder, allocation, signup and cancellation updates.',
   },
+  {
+    sourceIdentifier: 'community:public',
+    description:
+      'Relevant public Reddit, Discord, forum, news and social reports with original provenance.',
+  },
+  {
+    sourceIdentifier: 'market-evidence:public',
+    description:
+      'Source-backed completed-sale, supply and demand evidence; active asks stay separate from sold evidence.',
+  },
+] as const;
+
+export const SCOUT_ACTION_TYPES = [
+  'register',
+  'preorder',
+  'buy',
+  'attend',
+  'verify',
+  'watch',
+  'none',
+] as const;
+
+export const SCOUT_LIFECYCLE_STATUSES = [
+  'announced',
+  'registration_open',
+  'preorder_open',
+  'in_stock',
+  'closed',
+  'cancelled',
+  'unknown',
 ] as const;
 
 const httpsUrl = z
@@ -39,6 +70,29 @@ const nullableText = (maximum: number) =>
 const nullableUrl = httpsUrl.nullable().optional().default(null);
 const timestamp = z.string().datetime({ offset: true });
 const nullableTimestamp = timestamp.nullable().optional().default(null);
+const calendarDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use an ISO calendar date (YYYY-MM-DD).')
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return (
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() + 1 === month &&
+      parsed.getUTCDate() === day
+    );
+  }, 'Use a real calendar date.');
+const milestone = z.union([timestamp, calendarDate]);
+const nullableMilestone = milestone.nullable().optional().default(null);
+
+function actionWindowIsReversed(opensAt: string, deadlineAt: string): boolean {
+  if (
+    calendarDate.safeParse(opensAt).success ||
+    calendarDate.safeParse(deadlineAt).success
+  )
+    return opensAt.slice(0, 10) > deadlineAt.slice(0, 10);
+  return Date.parse(opensAt) > Date.parse(deadlineAt);
+}
 
 export const scoutSourceCheckSchema = z
   .object({
@@ -105,6 +159,7 @@ export const scoutFindingSchema = z
     ]),
     sourceIdentifier: z.string().trim().min(1).max(200),
     game: z.enum(['pokemon', 'riftbound']),
+    headline: nullableText(180),
     productName: nullableText(240),
     productLanguage: nullableText(64),
     updateType: z.enum([
@@ -124,6 +179,16 @@ export const scoutFindingSchema = z
     retailerOrOfficialUrl: nullableUrl,
     publishedAt: nullableTimestamp,
     observedAt: timestamp,
+    eventAt: nullableMilestone,
+    actionOpensAt: nullableMilestone,
+    actionDeadlineAt: nullableMilestone,
+    actionType: z.enum(SCOUT_ACTION_TYPES).nullable().optional().default(null),
+    actionInstruction: nullableText(400),
+    actionUrl: nullableUrl,
+    lifecycleStatus: z
+      .enum(SCOUT_LIFECYCLE_STATUSES)
+      .optional()
+      .default('unknown'),
     price: z.number().finite().positive().max(1_000_000).nullable(),
     currency: z.enum(['EUR', 'GBP', 'USD']).nullable(),
     region: nullableText(120),
@@ -183,6 +248,41 @@ export const scoutFindingSchema = z
         path: ['verificationEvidence'],
         message:
           'Checked claims require an evidence URL and verification observation time.',
+      });
+    const hasActionDetails = Boolean(
+      finding.actionInstruction ||
+      finding.actionUrl ||
+      finding.actionOpensAt ||
+      finding.actionDeadlineAt,
+    );
+    if (
+      hasActionDetails &&
+      (!finding.actionType || finding.actionType === 'none')
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actionType'],
+        message: 'Action details require a concrete actionType.',
+      });
+    if (
+      finding.actionType &&
+      finding.actionType !== 'none' &&
+      !finding.actionInstruction
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actionInstruction'],
+        message: 'A concrete actionType requires an actionInstruction.',
+      });
+    if (
+      finding.actionOpensAt &&
+      finding.actionDeadlineAt &&
+      actionWindowIsReversed(finding.actionOpensAt, finding.actionDeadlineAt)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actionDeadlineAt'],
+        message: 'actionDeadlineAt must be on or after actionOpensAt.',
       });
   });
 
@@ -391,6 +491,19 @@ export function validateScoutImportInput(
           message: 'Verification time must correspond to this research run.',
         });
     }
+    const latestMilestone = now + 5 * 366 * 24 * 60 * 60_000;
+    for (const [field, value] of [
+      ['eventAt', finding.eventAt],
+      ['actionOpensAt', finding.actionOpensAt],
+      ['actionDeadlineAt', finding.actionDeadlineAt],
+    ] as const)
+      if (value && Date.parse(value) > latestMilestone)
+        temporalIssues.push({
+          index,
+          code: 'milestone_too_far',
+          path: `findings.${index}.${field}`,
+          message: `${field} cannot be more than five years in the future.`,
+        });
   });
   if (temporalIssues.length)
     throw new ScoutIngestionValidationError(temporalIssues);
@@ -422,6 +535,12 @@ export function sanitizeScoutFinding(
 ): ScoutFindingInput {
   return {
     ...finding,
+    headline: finding.headline
+      ? redactPersonalData(normaliseCommunityText(finding.headline)).slice(
+          0,
+          180,
+        )
+      : null,
     productName: finding.productName
       ? normaliseCommunityText(finding.productName).slice(0, 240)
       : null,
@@ -429,6 +548,11 @@ export function sanitizeScoutFinding(
       ? normaliseCommunityText(finding.productLanguage).slice(0, 64)
       : null,
     summary: redactPersonalData(normaliseCommunityText(finding.summary)),
+    actionInstruction: finding.actionInstruction
+      ? redactPersonalData(
+          normaliseCommunityText(finding.actionInstruction),
+        ).slice(0, 400)
+      : null,
     region: finding.region
       ? normaliseCommunityText(finding.region).slice(0, 120)
       : null,
@@ -440,6 +564,9 @@ export function sanitizeScoutFinding(
       : null,
     retailerOrOfficialUrl: finding.retailerOrOfficialUrl
       ? canonicalizeScoutUrl(finding.retailerOrOfficialUrl)
+      : null,
+    actionUrl: finding.actionUrl
+      ? canonicalizeScoutUrl(finding.actionUrl)
       : null,
     verificationEvidence: finding.verificationEvidence
       ? {
@@ -494,15 +621,20 @@ export function scoutFindingMaterial(finding: ScoutFindingInput) {
   return {
     ...scoutFindingIdentity(finding),
     updateType: finding.updateType,
-    summary: finding.summary,
     publishedAt: finding.publishedAt,
+    eventAt: finding.eventAt,
+    actionOpensAt: finding.actionOpensAt,
+    actionDeadlineAt: finding.actionDeadlineAt,
+    actionType: finding.actionType,
+    actionUrl: finding.actionUrl,
+    lifecycleStatus: finding.lifecycleStatus,
     priceCents: finding.price === null ? null : Math.round(finding.price * 100),
     currency: finding.currency,
     region: finding.region,
     shippingToNetherlands: finding.shippingToNetherlands,
     availability: finding.availability,
     verificationStatus: finding.verificationStatus,
-    verificationEvidence: finding.verificationEvidence,
+    verificationEvidenceUrl: finding.verificationEvidence?.url ?? null,
   };
 }
 

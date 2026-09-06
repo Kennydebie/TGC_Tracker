@@ -476,6 +476,7 @@ export async function listCommunityDashboard(
       lastAttemptAt: null,
       lastRunStatus: null,
       actionableError: null,
+      latestRun: null,
     },
     sources,
     performance: {

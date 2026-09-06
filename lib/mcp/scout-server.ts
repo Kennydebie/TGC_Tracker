@@ -44,6 +44,17 @@ const nullableTimestamp = {
   type: ['string', 'null'],
   format: 'date-time',
 };
+const nullableMilestone = {
+  anyOf: [
+    { type: 'string', format: 'date-time' },
+    {
+      type: 'string',
+      format: 'date',
+      pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+    },
+    { type: 'null' },
+  ],
+};
 const timestamp = { type: 'string', format: 'date-time' };
 const httpsUrl = {
   type: 'string',
@@ -99,11 +110,31 @@ const EVIDENCE_SCHEMA = {
   },
 } as const;
 
+const ACTION_TYPES = [
+  'register',
+  'preorder',
+  'buy',
+  'attend',
+  'verify',
+  'watch',
+  'none',
+] as const;
+
+const LIFECYCLE_STATUSES = [
+  'announced',
+  'registration_open',
+  'preorder_open',
+  'in_stock',
+  'closed',
+  'cancelled',
+  'unknown',
+] as const;
+
 const FINDING_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   description:
-    'One source-backed finding. Keep unavailable facts null or unknown. price and currency must be both known or both null. Checked verification requires verificationEvidence.',
+    'One source-backed market-intelligence finding. Keep unavailable facts null or unknown. Milestones accept an exact offset timestamp or a sourced YYYY-MM-DD when no time is published. Never put a future date in publishedAt. price is the observed acquisition or asking price, not resale value or guaranteed profit.',
   required: [
     'sourceKind',
     'sourceIdentifier',
@@ -129,6 +160,7 @@ const FINDING_SCHEMA = {
     },
     sourceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
     game: { enum: ['pokemon', 'riftbound'] },
+    headline: { ...nullableString, maxLength: 180 },
     productName: { ...nullableString, maxLength: 240 },
     productLanguage: { ...nullableString, maxLength: 64 },
     updateType: {
@@ -150,6 +182,33 @@ const FINDING_SCHEMA = {
     retailerOrOfficialUrl: nullableUrl,
     publishedAt: nullableTimestamp,
     observedAt: timestamp,
+    eventAt: {
+      ...nullableMilestone,
+      description:
+        'Release/event date or exact offset timestamp. Use YYYY-MM-DD when the source publishes no time, or null when unknown.',
+    },
+    actionOpensAt: {
+      ...nullableMilestone,
+      description:
+        'Date or exact offset timestamp when the action becomes available, or null.',
+    },
+    actionDeadlineAt: {
+      ...nullableMilestone,
+      description:
+        'Signup, preorder, purchase or attendance deadline as an exact offset timestamp, or YYYY-MM-DD when no time is published. Do not infer either.',
+    },
+    actionType: { enum: [...ACTION_TYPES, null] },
+    actionInstruction: {
+      ...nullableString,
+      maxLength: 400,
+      description:
+        'One short factual instruction, or null. A buy/preorder finding must instruct the user to verify completed-sale evidence and full economics, never to purchase.',
+    },
+    actionUrl: nullableUrl,
+    lifecycleStatus: {
+      enum: LIFECYCLE_STATUSES,
+      default: 'unknown',
+    },
     price: {
       type: ['number', 'null'],
       exclusiveMinimum: 0,
@@ -438,7 +497,7 @@ const tools = [
     name: 'get_scout_ingestion_state',
     title: 'Get TCG Scout ingestion state',
     description:
-      "Call before research or import. Returns only the signed-in account's recent web-research imports, source coverage, material hashes, and run outcomes so duplicates and coverage gaps can be avoided.",
+      "Call before research or import. Returns only the signed-in account's recent scheduled-research imports, broad source coverage, material hashes, and run outcomes so duplicates and coverage gaps can be avoided.",
     inputSchema: GET_STATE_INPUT_SCHEMA,
     outputSchema: GET_STATE_OUTPUT_SCHEMA,
     annotations: {
@@ -454,7 +513,7 @@ const tools = [
     name: 'save_scout_findings',
     title: 'Save TCG Scout findings',
     description:
-      'Validate and save up to 25 Pokémon or Riftbound web-research findings plus retry-safe source coverage for the signed-in account. Preserve unknown values and original provenance. Call get_scout_ingestion_state first.',
+      'Validate and save up to 25 source-backed Pokémon or Riftbound market-intelligence findings plus retry-safe source coverage for the signed-in account. Findings may come from official sites, organizers, retailers, marketplaces, news, Reddit, Discord or other public web sources. Preserve unknown values, original provenance, and sourced event/action dates without inventing a time. Scheduled findings are not purchase recommendations. Call get_scout_ingestion_state first.',
     inputSchema: SAVE_FINDINGS_INPUT_SCHEMA,
     outputSchema: SAVE_FINDINGS_OUTPUT_SCHEMA,
     annotations: {
@@ -573,7 +632,7 @@ export function createScoutMcpServer(context: ScoutMcpContext): Server {
     {
       capabilities: { tools: {} },
       instructions:
-        'Call get_scout_ingestion_state before save_scout_findings. Use stable run IDs, preserve unknown facts, retain source provenance, and report the returned import counts.',
+        'Call get_scout_ingestion_state before save_scout_findings. Research broadly across relevant official, retailer, marketplace, news and community sources. Use stable run IDs, preserve unknown facts, retain source provenance, and record dates or exact times only as published. Never turn an asking price into profit, ROI, or a purchase recommendation. Report the returned import counts.',
     },
   );
   server.setRequestHandler(

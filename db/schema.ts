@@ -1472,6 +1472,7 @@ export const scoutFindings = sqliteTable(
     sourceKind: text('source_kind').notNull(),
     sourceIdentifier: text('source_identifier').notNull(),
     game: text('game').notNull(),
+    headline: text('headline'),
     productName: text('product_name'),
     productLanguage: text('product_language'),
     updateType: text('update_type').notNull(),
@@ -1482,12 +1483,29 @@ export const scoutFindings = sqliteTable(
     retailerName: text('retailer_name'),
     retailerOrOfficialUrl: text('retailer_or_official_url'),
     publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+    eventAt: text('event_at'),
+    actionOpensAt: text('action_opens_at'),
+    actionDeadlineAt: text('action_deadline_at'),
+    eventSortAt: integer('event_sort_at', { mode: 'timestamp_ms' }),
+    actionOpensSortAt: integer('action_opens_sort_at', {
+      mode: 'timestamp_ms',
+    }),
+    actionDeadlineSortAt: integer('action_deadline_sort_at', {
+      mode: 'timestamp_ms',
+    }),
+    actionType: text('action_type'),
+    actionInstruction: text('action_instruction'),
+    actionUrl: text('action_url'),
+    lifecycleStatus: text('lifecycle_status').notNull().default('unknown'),
     firstObservedAt: integer('first_observed_at', {
       mode: 'timestamp_ms',
     }).notNull(),
     lastObservedAt: integer('last_observed_at', {
       mode: 'timestamp_ms',
     }).notNull(),
+    materialChangedAt: integer('material_changed_at', {
+      mode: 'timestamp_ms',
+    }),
     priceCents: integer('price_cents'),
     currency: text('currency'),
     region: text('region'),
@@ -1517,6 +1535,19 @@ export const scoutFindings = sqliteTable(
     index('idx_scout_finding_user_observed').on(
       table.userId,
       table.lastObservedAt,
+    ),
+    index('idx_scout_finding_user_event').on(table.userId, table.eventSortAt),
+    index('idx_scout_finding_user_action_opens').on(
+      table.userId,
+      table.actionOpensSortAt,
+    ),
+    index('idx_scout_finding_user_action_deadline').on(
+      table.userId,
+      table.actionDeadlineSortAt,
+    ),
+    index('idx_scout_finding_user_lifecycle').on(
+      table.userId,
+      table.lifecycleStatus,
     ),
     index('idx_scout_finding_user_source').on(
       table.userId,
