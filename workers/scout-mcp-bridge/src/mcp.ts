@@ -1,15 +1,19 @@
 import {
   McpServer,
+  type AuthInfo,
   type McpRequestContext,
   type CallToolResult,
 } from '@modelcontextprotocol/server';
+import type { TokenSummary } from '@cloudflare/workers-oauth-provider';
 import { createMcpHandler, getMcpAuthContext } from 'agents/mcp/server';
 import { z } from 'zod';
 
 import {
+  BRIDGE_ORIGIN,
   BRIDGE_HOSTNAME,
   MCP_PATH,
   MCP_RESOURCE,
+  SCOUT_SCOPES,
   TOOL_NAMES,
   type ScoutScope,
 } from './constants';
@@ -38,13 +42,25 @@ const authPropsSchema = z
 
 type AuthProps = z.infer<typeof authPropsSchema>;
 
+type ResolvedMcpAuthorization = {
+  authInfo: AuthInfo;
+  authProps: AuthProps;
+};
+
+type UnwrapAccessToken = (
+  token: string,
+) => Promise<TokenSummary<unknown> | null>;
+
 type ServerDependencies = {
   fetchImplementation?: FetchImplementation;
   authProps?: unknown;
 };
 
 class ToolAuthorizationError extends Error {
-  constructor() {
+  constructor(
+    readonly error: 'invalid_token' | 'insufficient_scope',
+    readonly requiredScope: ScoutScope,
+  ) {
     super('tool_authorization_failed');
     this.name = 'ToolAuthorizationError';
   }
@@ -54,8 +70,20 @@ function oauthSecurity(scope: ScoutScope): Array<Record<string, unknown>> {
   return [{ type: 'oauth2', scopes: [scope] }];
 }
 
-function errorResult(message: string): CallToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true };
+function authorizationChallenge(
+  error: 'invalid_token' | 'insufficient_scope',
+  requiredScopes: readonly ScoutScope[],
+): string {
+  const metadataUrl = `${BRIDGE_ORIGIN}/.well-known/oauth-protected-resource${MCP_PATH}`;
+  return `Bearer resource_metadata="${metadataUrl}", error="${error}", error_description="Reconnect TCG Community Scout to continue.", scope="${requiredScopes.join(' ')}"`;
+}
+
+function errorResult(message: string, challenge?: string): CallToolResult {
+  return {
+    content: [{ type: 'text', text: message }],
+    isError: true,
+    ...(challenge ? { _meta: { 'mcp/www_authenticate': [challenge] } } : {}),
+  };
 }
 
 function authorizeTool(
@@ -66,17 +94,23 @@ function authorizeTool(
 ): AuthProps {
   if (
     !requestContext.authInfo ||
-    requestContext.authInfo.resource?.href !== MCP_RESOURCE ||
-    !requestContext.authInfo.scopes.includes(requiredScope)
+    requestContext.authInfo.resource?.href !== MCP_RESOURCE
   ) {
-    throw new ToolAuthorizationError();
+    throw new ToolAuthorizationError('invalid_token', requiredScope);
   }
-  const props = authPropsSchema.parse(authPropsValue);
+  if (!requestContext.authInfo.scopes.includes(requiredScope)) {
+    throw new ToolAuthorizationError('insufficient_scope', requiredScope);
+  }
+  const parsedProps = authPropsSchema.safeParse(authPropsValue);
+  if (!parsedProps.success) {
+    throw new ToolAuthorizationError('invalid_token', requiredScope);
+  }
+  const props = parsedProps.data;
   if (
     props.githubUserId !== allowedGithubUserId ||
     props.subject !== `github:${allowedGithubUserId}`
   ) {
-    throw new ToolAuthorizationError();
+    throw new ToolAuthorizationError('invalid_token', requiredScope);
   }
   return props;
 }
@@ -85,9 +119,10 @@ function toolFailure(
   error: unknown,
   operation: 'read' | 'write',
 ): CallToolResult {
-  if (error instanceof ToolAuthorizationError || error instanceof z.ZodError) {
+  if (error instanceof ToolAuthorizationError) {
     return errorResult(
       'This tool call is not authorized for this TCG Scout account.',
+      authorizationChallenge(error.error, [error.requiredScope]),
     );
   }
   if (error instanceof DownstreamError) {
@@ -104,6 +139,78 @@ function toolFailure(
     operation === 'read'
       ? 'TCG Scout could not read ingestion state. Try again later.'
       : 'TCG Scout could not save this import. Check ingestion state before retrying.',
+  );
+}
+
+function bearerToken(request: Request): string | null {
+  const authorization = request.headers.get('authorization');
+  if (!authorization || authorization.length > 4_096) return null;
+  return /^Bearer ([^\s]+)$/i.exec(authorization)?.[1] ?? null;
+}
+
+function hasExactAudience(audience: string | string[] | undefined): boolean {
+  if (!audience) return false;
+  return (Array.isArray(audience) ? audience : [audience]).includes(
+    MCP_RESOURCE,
+  );
+}
+
+export async function resolveMcpAuthorization(
+  request: Request,
+  unwrapAccessToken: UnwrapAccessToken,
+  nowSeconds = Math.floor(Date.now() / 1_000),
+): Promise<ResolvedMcpAuthorization | null> {
+  const token = bearerToken(request);
+  if (!token) return null;
+
+  const summary = await unwrapAccessToken(token);
+  if (
+    !summary ||
+    summary.expiresAt <= nowSeconds ||
+    !hasExactAudience(summary.audience) ||
+    typeof summary.grant.clientId !== 'string' ||
+    summary.grant.clientId.length === 0 ||
+    !Array.isArray(summary.scope) ||
+    !summary.scope.every((scope) => typeof scope === 'string')
+  ) {
+    return null;
+  }
+
+  const parsedProps = authPropsSchema.safeParse(summary.grant.props);
+  if (
+    !parsedProps.success ||
+    summary.userId !== `github-${parsedProps.data.githubUserId}`
+  ) {
+    return null;
+  }
+
+  return {
+    authProps: parsedProps.data,
+    authInfo: {
+      token,
+      clientId: summary.grant.clientId,
+      scopes: [...summary.scope],
+      expiresAt: summary.expiresAt,
+      resource: new URL(MCP_RESOURCE),
+      extra: { props: parsedProps.data },
+    },
+  };
+}
+
+function unauthorizedResponse(): Response {
+  const challenge = authorizationChallenge('invalid_token', SCOUT_SCOPES);
+  return Response.json(
+    {
+      error: 'invalid_token',
+      error_description: 'Reconnect TCG Community Scout to continue.',
+    },
+    {
+      status: 401,
+      headers: {
+        'cache-control': 'no-store',
+        'www-authenticate': challenge,
+      },
+    },
   );
 }
 
@@ -218,7 +325,7 @@ type RequiredFetchHandler<Environment> = {
 };
 
 export const mcpApiHandler: RequiredFetchHandler<BridgeAuthEnv> = {
-  async fetch(request, unsafeEnv, context) {
+  async fetch(request, unsafeEnv) {
     let env: BridgeEnv;
     try {
       env = parseBridgeEnv(unsafeEnv);
@@ -228,13 +335,39 @@ export const mcpApiHandler: RequiredFetchHandler<BridgeAuthEnv> = {
       });
     }
 
+    let authorization: ResolvedMcpAuthorization | null;
+    try {
+      // OAuthProvider validates the request before dispatch but currently passes
+      // only identity props to stateless handlers. Recreate the standard MCP
+      // AuthInfo from its documented token summary so scope checks stay intact.
+      authorization = await resolveMcpAuthorization(request, (token) =>
+        unsafeEnv.OAUTH_PROVIDER.unwrapToken<unknown>(token),
+      );
+    } catch {
+      console.error(
+        JSON.stringify({
+          component: 'tcg-scout-oauth',
+          event: 'mcp_auth_context_resolution_failed',
+        }),
+      );
+      return new Response('Authentication validation is unavailable.', {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    if (!authorization) return unauthorizedResponse();
+
     const handler = createMcpHandler(
-      (requestContext) => createScoutMcpServer(env, requestContext),
+      (requestContext) =>
+        createScoutMcpServer(env, requestContext, {
+          authProps: authorization.authProps,
+        }),
       {
         route: MCP_PATH,
         legacy: 'stateless',
         responseMode: 'json',
         corsOptions: false,
+        authContext: { props: authorization.authProps },
         allowedHostnames: [BRIDGE_HOSTNAME],
         allowedOriginHostnames: [
           BRIDGE_HOSTNAME,
@@ -244,6 +377,6 @@ export const mcpApiHandler: RequiredFetchHandler<BridgeAuthEnv> = {
         ],
       },
     );
-    return handler(request, env, context);
+    return handler.fetch(request, { authInfo: authorization.authInfo });
   },
 };
